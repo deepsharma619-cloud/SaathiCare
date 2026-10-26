@@ -1,0 +1,6 @@
+{
+  "name": "SaathiCare — Senior Citizen Companion Booking",
+  "description": "Trustworthy non-medical senior citizen companion booking platform for Bengaluru with verified helpers, family authorization, and server-enforced workflows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

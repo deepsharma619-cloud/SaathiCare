@@ -1,0 +1,1017 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Core authenticated user profile with role and contact details isolated to owner and admin.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified email address",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "fullName": {
+          "type": "string",
+          "description": "Full display name of the user",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "phone": {
+          "type": "string",
+          "description": "Indian contact phone number",
+          "minLength": 10,
+          "maxLength": 20
+        },
+        "role": {
+          "type": "string",
+          "description": "Primary role in SaathiCare (admin role cannot be self-assigned)",
+          "enum": ["senior", "family_member", "helper", "admin"]
+        },
+        "city": {
+          "type": "string",
+          "description": "Operating city (Bengaluru)",
+          "enum": ["Bengaluru"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of user registration"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last profile update"
+        }
+      },
+      "required": ["uid", "email", "fullName", "phone", "role", "city", "createdAt", "updatedAt"]
+    },
+    "SeniorProfile": {
+      "title": "SeniorProfile",
+      "description": "Senior citizen profile with non-medical preferences, locality, and emergency family contact.",
+      "type": "object",
+      "properties": {
+        "seniorId": {
+          "type": "string",
+          "description": "Matches the senior's Firebase Auth UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fullName": {
+          "type": "string",
+          "description": "Senior citizen full name",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "age": {
+          "type": "number",
+          "description": "Age in years (must be 55 to 115)"
+        },
+        "phone": {
+          "type": "string",
+          "description": "Senior contact phone",
+          "minLength": 10,
+          "maxLength": 20
+        },
+        "locality": {
+          "type": "string",
+          "description": "Bengaluru service locality",
+          "minLength": 2,
+          "maxLength": 60
+        },
+        "address": {
+          "type": "string",
+          "description": "Residential pickup address in Bengaluru",
+          "minLength": 5,
+          "maxLength": 300
+        },
+        "preferredLanguages": {
+          "type": "array",
+          "description": "Up to 5 spoken languages (e.g. Kannada, English, Hindi, Tamil, Telugu)"
+        },
+        "mobilityNote": {
+          "type": "string",
+          "description": "Non-medical walking/pace preference (e.g. walks slowly, uses walking stick)",
+          "minLength": 0,
+          "maxLength": 250
+        },
+        "emergencyContactName": {
+          "type": "string",
+          "description": "Primary family or neighbour contact name",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "emergencyContactPhone": {
+          "type": "string",
+          "description": "Primary emergency contact phone",
+          "minLength": 10,
+          "maxLength": 20
+        },
+        "allowFamilyBookings": {
+          "type": "boolean",
+          "description": "Whether the senior allows explicitly approved family members to book on their behalf"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp"
+        }
+      },
+      "required": [
+        "seniorId",
+        "fullName",
+        "age",
+        "phone",
+        "locality",
+        "address",
+        "preferredLanguages",
+        "mobilityNote",
+        "emergencyContactName",
+        "emergencyContactPhone",
+        "allowFamilyBookings",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FamilyLink": {
+      "title": "FamilyLink",
+      "description": "Explicit consent and authorization record linking a senior citizen and a family member. Document ID is {seniorId}_{familyUid}.",
+      "type": "object",
+      "properties": {
+        "linkId": {
+          "type": "string",
+          "description": "Deterministic ID: {seniorId}_{familyUid}",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "seniorId": {
+          "type": "string",
+          "description": "UID of the senior citizen",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "seniorName": {
+          "type": "string",
+          "description": "Name of the senior citizen",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "familyUid": {
+          "type": "string",
+          "description": "UID of the family member requesting or holding access",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "familyName": {
+          "type": "string",
+          "description": "Name of the family member",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "familyEmail": {
+          "type": "string",
+          "description": "Email of the family member",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "relationship": {
+          "type": "string",
+          "description": "Relationship to the senior (e.g. Daughter, Son, Niece, Son-in-law)",
+          "minLength": 2,
+          "maxLength": 50
+        },
+        "status": {
+          "type": "string",
+          "description": "Authorization state: pending_consent, active, or revoked",
+          "enum": ["pending_consent", "active", "revoked"]
+        },
+        "consentNote": {
+          "type": "string",
+          "description": "Explicit consent statement or revocation reason",
+          "minLength": 2,
+          "maxLength": 300
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when link was requested"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when consent was granted or revoked"
+        }
+      },
+      "required": [
+        "linkId",
+        "seniorId",
+        "seniorName",
+        "familyUid",
+        "familyName",
+        "familyEmail",
+        "relationship",
+        "status",
+        "consentNote",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Helper": {
+      "title": "Helper",
+      "description": "Companion helper profile and admin-controlled verification status (no raw identity document numbers exposed).",
+      "type": "object",
+      "properties": {
+        "helperId": {
+          "type": "string",
+          "description": "Matches the helper's Firebase Auth UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fullName": {
+          "type": "string",
+          "description": "Full name of the companion helper",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "phone": {
+          "type": "string",
+          "description": "Contact phone number",
+          "minLength": 10,
+          "maxLength": 20
+        },
+        "bio": {
+          "type": "string",
+          "description": "Non-medical companion experience summary",
+          "minLength": 10,
+          "maxLength": 500
+        },
+        "languages": {
+          "type": "array",
+          "description": "Spoken languages (up to 6)"
+        },
+        "serviceAreas": {
+          "type": "array",
+          "description": "Bengaluru localities served (up to 10)"
+        },
+        "servicesOffered": {
+          "type": "array",
+          "description": "Supported non-medical services (up to 3)"
+        },
+        "yearsExperience": {
+          "type": "number",
+          "description": "Years of senior companionship or hospitality experience"
+        },
+        "verificationStatus": {
+          "type": "string",
+          "description": "Admin-controlled status: pending, approved, rejected, suspended",
+          "enum": ["pending", "approved", "rejected", "suspended"]
+        },
+        "idCheckReviewed": {
+          "type": "boolean",
+          "description": "Admin reviewed government ID offline (document never stored in public profile)"
+        },
+        "backgroundCheckReviewed": {
+          "type": "boolean",
+          "description": "Admin reviewed police/background verification"
+        },
+        "referenceCheckReviewed": {
+          "type": "boolean",
+          "description": "Admin verified two local references"
+        },
+        "trainingCompleted": {
+          "type": "boolean",
+          "description": "Admin confirmed completion of non-medical senior etiquette training"
+        },
+        "verificationNotes": {
+          "type": "string",
+          "description": "Admin audit note on verification decision",
+          "minLength": 0,
+          "maxLength": 300
+        },
+        "isActive": {
+          "type": "boolean",
+          "description": "Whether the helper is currently active for assignments"
+        },
+        "completedBookingsCount": {
+          "type": "number",
+          "description": "Real count of completed bookings (never fabricated)"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp"
+        }
+      },
+      "required": [
+        "helperId",
+        "fullName",
+        "phone",
+        "bio",
+        "languages",
+        "serviceAreas",
+        "servicesOffered",
+        "yearsExperience",
+        "verificationStatus",
+        "idCheckReviewed",
+        "backgroundCheckReviewed",
+        "referenceCheckReviewed",
+        "trainingCompleted",
+        "verificationNotes",
+        "isActive",
+        "completedBookingsCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Availability": {
+      "title": "Availability",
+      "description": "Helper weekly availability and shift preferences.",
+      "type": "object",
+      "properties": {
+        "availabilityId": {
+          "type": "string",
+          "description": "Matches helperId",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "helperId": {
+          "type": "string",
+          "description": "UID of the helper",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "availableDays": {
+          "type": "array",
+          "description": "Days of week available (up to 7)"
+        },
+        "startHour": {
+          "type": "string",
+          "description": "Earliest start time in HH:MM (e.g. 07:00)",
+          "minLength": 5,
+          "maxLength": 5
+        },
+        "endHour": {
+          "type": "string",
+          "description": "Latest end time in HH:MM (e.g. 20:00)",
+          "minLength": 5,
+          "maxLength": 5
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp"
+        }
+      },
+      "required": ["availabilityId", "helperId", "availableDays", "startHour", "endHour", "updatedAt"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Non-medical companion booking record with server-enforced pricing and state transitions.",
+      "type": "object",
+      "properties": {
+        "bookingId": {
+          "type": "string",
+          "description": "Document ID of the booking",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "bookingRef": {
+          "type": "string",
+          "description": "Human-readable unique booking reference (e.g. SC-BLR-849201)",
+          "minLength": 8,
+          "maxLength": 32,
+          "pattern": "^SC-BLR-[A-Z0-9\\-]+$"
+        },
+        "seniorId": {
+          "type": "string",
+          "description": "UID of the senior citizen receiving accompaniment",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "seniorName": {
+          "type": "string",
+          "description": "Full name of the senior citizen",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "seniorPhone": {
+          "type": "string",
+          "description": "Phone number of the senior citizen",
+          "minLength": 10,
+          "maxLength": 20
+        },
+        "bookedByUid": {
+          "type": "string",
+          "description": "UID of the user who created the booking (senior or authorized family member)",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "bookedByName": {
+          "type": "string",
+          "description": "Name of the user who created the booking",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "bookedByRole": {
+          "type": "string",
+          "description": "Role of the creator: senior or family_member",
+          "enum": ["senior", "family_member"]
+        },
+        "serviceType": {
+          "type": "string",
+          "description": "Non-medical service category",
+          "enum": ["hospital_accompaniment", "shopping_errands", "companionship_visit"]
+        },
+        "date": {
+          "type": "string",
+          "description": "Visit date in YYYY-MM-DD format",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "startTime": {
+          "type": "string",
+          "description": "Start time in HH:MM 24h format",
+          "minLength": 5,
+          "maxLength": 5,
+          "pattern": "^[0-9]{2}:[0-9]{2}$"
+        },
+        "durationHours": {
+          "type": "number",
+          "description": "Duration in hours: 2, 4, or 8 (full day)"
+        },
+        "locality": {
+          "type": "string",
+          "description": "Bengaluru pickup locality",
+          "minLength": 2,
+          "maxLength": 60
+        },
+        "pickupAddress": {
+          "type": "string",
+          "description": "Full pickup address in Bengaluru",
+          "minLength": 5,
+          "maxLength": 300
+        },
+        "destination": {
+          "type": "string",
+          "description": "Optional hospital, clinic, or market destination",
+          "minLength": 0,
+          "maxLength": 200
+        },
+        "taskNotes": {
+          "type": "string",
+          "description": "Non-medical accompaniment instructions",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "basePriceInr": {
+          "type": "number",
+          "description": "Calculated base price in INR (500 for 2h, 900 for 4h, 1600 for 8h)"
+        },
+        "additionalChargesInr": {
+          "type": "number",
+          "description": "Service surcharge in INR (150 for hospital, 50 for errands, 0 for companionship)"
+        },
+        "totalPriceInr": {
+          "type": "number",
+          "description": "Exact sum of basePriceInr + additionalChargesInr"
+        },
+        "paymentStatus": {
+          "type": "string",
+          "description": "Configured payment status: pay_later_unconfigured, pay_later_pending, paid_online, or paid_after_visit",
+          "enum": [
+            "pay_later_unconfigured",
+            "pay_later_pending",
+            "paid_online",
+            "paid_after_visit"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "description": "Current workflow state",
+          "enum": [
+            "pending_assignment",
+            "assigned",
+            "accepted",
+            "arrived",
+            "in_progress",
+            "completed",
+            "cancelled",
+            "needs_attention"
+          ]
+        },
+        "assignedHelperUid": {
+          "type": "string",
+          "description": "UID of assigned helper (empty string when unassigned)",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "assignedHelperName": {
+          "type": "string",
+          "description": "Name of assigned helper (empty string when unassigned)",
+          "minLength": 0,
+          "maxLength": 100
+        },
+        "assignedHelperPhone": {
+          "type": "string",
+          "description": "Phone of assigned helper (empty string when unassigned)",
+          "minLength": 0,
+          "maxLength": 20
+        },
+        "locationConsentGranted": {
+          "type": "boolean",
+          "description": "Explicit consent for pickup address & visit check-in sharing with assigned helper"
+        },
+        "nonMedicalAcknowledged": {
+          "type": "boolean",
+          "description": "Explicit acknowledgement that SaathiCare provides non-medical assistance only"
+        },
+        "cancellationReason": {
+          "type": "string",
+          "description": "Reason provided if cancelled or flagged for attention",
+          "minLength": 0,
+          "maxLength": 300
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of booking creation"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last status update"
+        }
+      },
+      "required": [
+        "bookingId",
+        "bookingRef",
+        "seniorId",
+        "seniorName",
+        "seniorPhone",
+        "bookedByUid",
+        "bookedByName",
+        "bookedByRole",
+        "serviceType",
+        "date",
+        "startTime",
+        "durationHours",
+        "locality",
+        "pickupAddress",
+        "destination",
+        "taskNotes",
+        "basePriceInr",
+        "additionalChargesInr",
+        "totalPriceInr",
+        "paymentStatus",
+        "status",
+        "assignedHelperUid",
+        "assignedHelperName",
+        "assignedHelperPhone",
+        "locationConsentGranted",
+        "nonMedicalAcknowledged",
+        "cancellationReason",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "BookingEvent": {
+      "title": "BookingEvent",
+      "description": "Append-only audit trail of booking state transitions.",
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "description": "Unique event ID",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "bookingId": {
+          "type": "string",
+          "description": "ID of the parent booking",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "seniorId": {
+          "type": "string",
+          "description": "UID of the senior on the booking",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "bookedByUid": {
+          "type": "string",
+          "description": "UID of the user who created the booking",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "assignedHelperUid": {
+          "type": "string",
+          "description": "UID of the helper on the booking if assigned",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "fromStatus": {
+          "type": "string",
+          "description": "Previous booking status (or 'none' on creation)",
+          "enum": [
+            "none",
+            "pending_assignment",
+            "assigned",
+            "accepted",
+            "arrived",
+            "in_progress",
+            "completed",
+            "cancelled",
+            "needs_attention"
+          ]
+        },
+        "toStatus": {
+          "type": "string",
+          "description": "New booking status",
+          "enum": [
+            "pending_assignment",
+            "assigned",
+            "accepted",
+            "arrived",
+            "in_progress",
+            "completed",
+            "cancelled",
+            "needs_attention"
+          ]
+        },
+        "actorUid": {
+          "type": "string",
+          "description": "UID of the authenticated user performing the transition",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "actorName": {
+          "type": "string",
+          "description": "Display name of the actor",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "actorRole": {
+          "type": "string",
+          "description": "Role of the actor",
+          "enum": ["senior", "family_member", "helper", "admin"]
+        },
+        "note": {
+          "type": "string",
+          "description": "Human-readable audit note",
+          "minLength": 2,
+          "maxLength": 300
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable server timestamp"
+        }
+      },
+      "required": [
+        "eventId",
+        "bookingId",
+        "seniorId",
+        "bookedByUid",
+        "assignedHelperUid",
+        "fromStatus",
+        "toStatus",
+        "actorUid",
+        "actorName",
+        "actorRole",
+        "note",
+        "createdAt"
+      ]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "Verified post-completion feedback for a completed booking.",
+      "type": "object",
+      "properties": {
+        "reviewId": {
+          "type": "string",
+          "description": "Matches bookingId so at most one review exists per completed booking",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "bookingId": {
+          "type": "string",
+          "description": "Completed booking ID",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "helperId": {
+          "type": "string",
+          "description": "UID of the helper reviewed",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorUid": {
+          "type": "string",
+          "description": "UID of the senior or family booker who submitted the review",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Name of the reviewer",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "rating": {
+          "type": "number",
+          "description": "Star rating from 1 to 5"
+        },
+        "comment": {
+          "type": "string",
+          "description": "Review text",
+          "minLength": 5,
+          "maxLength": 400
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        }
+      },
+      "required": ["reviewId", "bookingId", "helperId", "authorUid", "authorName", "rating", "comment", "createdAt"]
+    },
+    "Incident": {
+      "title": "Incident",
+      "description": "Support or incident report restricted to the reporter and administrators.",
+      "type": "object",
+      "properties": {
+        "incidentId": {
+          "type": "string",
+          "description": "Unique incident ID",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "bookingId": {
+          "type": "string",
+          "description": "Related booking ID (or 'general' if not tied to a booking)",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "reporterUid": {
+          "type": "string",
+          "description": "UID of the user reporting the issue",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "reporterName": {
+          "type": "string",
+          "description": "Name of the reporter",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "reporterRole": {
+          "type": "string",
+          "description": "Role of the reporter",
+          "enum": ["senior", "family_member", "helper", "admin"]
+        },
+        "severity": {
+          "type": "string",
+          "description": "Incident severity level",
+          "enum": ["low", "medium", "high"]
+        },
+        "category": {
+          "type": "string",
+          "description": "Issue category",
+          "enum": ["punctuality", "conduct", "safety_concern", "billing_question", "other"]
+        },
+        "description": {
+          "type": "string",
+          "description": "Detailed description of the support issue or incident",
+          "minLength": 10,
+          "maxLength": 600
+        },
+        "status": {
+          "type": "string",
+          "description": "Resolution status: open, investigating, resolved",
+          "enum": ["open", "investigating", "resolved"]
+        },
+        "adminResolutionNote": {
+          "type": "string",
+          "description": "Admin investigation or resolution notes",
+          "minLength": 0,
+          "maxLength": 400
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when reported"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update"
+        }
+      },
+      "required": [
+        "incidentId",
+        "bookingId",
+        "reporterUid",
+        "reporterName",
+        "reporterRole",
+        "severity",
+        "category",
+        "description",
+        "status",
+        "adminResolutionNote",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SystemConfig": {
+      "title": "SystemConfig",
+      "description": "Admin-managed city configuration, service areas, transparent pricing rates, and support helpline.",
+      "type": "object",
+      "properties": {
+        "configId": {
+          "type": "string",
+          "description": "Singleton ID 'bengaluru'",
+          "enum": ["bengaluru"]
+        },
+        "city": {
+          "type": "string",
+          "description": "Operating city name",
+          "enum": ["Bengaluru"]
+        },
+        "supportPhone": {
+          "type": "string",
+          "description": "Persistent support helpline number",
+          "minLength": 8,
+          "maxLength": 24
+        },
+        "supportEmail": {
+          "type": "string",
+          "description": "Persistent support email",
+          "minLength": 5,
+          "maxLength": 120
+        },
+        "serviceAreas": {
+          "type": "array",
+          "description": "Active Bengaluru localities (up to 15)"
+        },
+        "rate2HoursInr": {
+          "type": "number",
+          "description": "Base price for 2 hours (INR)"
+        },
+        "rate4HoursInr": {
+          "type": "number",
+          "description": "Base price for 4 hours (INR)"
+        },
+        "rate8HoursInr": {
+          "type": "number",
+          "description": "Base price for 8 hours / full day (INR)"
+        },
+        "hospitalSurchargeInr": {
+          "type": "number",
+          "description": "Additional charge for hospital/clinic accompaniment"
+        },
+        "errandsSurchargeInr": {
+          "type": "number",
+          "description": "Additional charge for shopping & errands"
+        },
+        "updatedByUid": {
+          "type": "string",
+          "description": "Admin UID who updated the config",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of update"
+        }
+      },
+      "required": [
+        "configId",
+        "city",
+        "supportPhone",
+        "supportEmail",
+        "serviceAreas",
+        "rate2HoursInr",
+        "rate4HoursInr",
+        "rate8HoursInr",
+        "hospitalSurchargeInr",
+        "errandsSurchargeInr",
+        "updatedByUid",
+        "updatedAt"
+      ]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Trusted administrator lookup document in /admins/{adminUid}.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Admin Firebase Auth UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "description": "Verified admin email",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "grantedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp"
+        }
+      },
+      "required": ["uid", "email", "grantedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Private user account records isolated to the user and administrators."
+    },
+    "/seniorProfiles/{seniorId}": {
+      "schema": { "$ref": "#/entities/SeniorProfile" },
+      "description": "Senior citizen profiles accessible to the senior, explicitly authorized family members, and administrators."
+    },
+    "/familyLinks/{linkId}": {
+      "schema": { "$ref": "#/entities/FamilyLink" },
+      "description": "Consent and authorization links between seniors and family members ({seniorId}_{familyUid})."
+    },
+    "/helpers/{helperId}": {
+      "schema": { "$ref": "#/entities/Helper" },
+      "description": "Companion helper profiles and admin-controlled verification checklist records."
+    },
+    "/availability/{availabilityId}": {
+      "schema": { "$ref": "#/entities/Availability" },
+      "description": "Helper weekly availability windows."
+    },
+    "/bookings/{bookingId}": {
+      "schema": { "$ref": "#/entities/Booking" },
+      "description": "Companion service bookings with strict pricing and workflow state transition rules."
+    },
+    "/bookingEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/BookingEvent" },
+      "description": "Immutable append-only audit log of booking status changes."
+    },
+    "/reviews/{reviewId}": {
+      "schema": { "$ref": "#/entities/Review" },
+      "description": "Verified post-booking reviews submitted only for completed bookings."
+    },
+    "/incidents/{incidentId}": {
+      "schema": { "$ref": "#/entities/Incident" },
+      "description": "Support and incident reports isolated strictly to the reporter and administrators."
+    },
+    "/systemConfig/{configId}": {
+      "schema": { "$ref": "#/entities/SystemConfig" },
+      "description": "Publicly readable, admin-writable service area, pricing, and support contact configuration."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Administrator registry manageable only by bootstrapped or existing administrators."
+    }
+  }
+}

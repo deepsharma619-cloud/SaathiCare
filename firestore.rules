@@ -1,0 +1,783 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Global Hardened Primitives
+    // =========================================================================
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isVerifiedUser() && request.auth.uid == uid;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'deepsharma619@gmail.com';
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        isBootstrappedAdmin() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isAuthorizedFamilyForSenior(seniorId) {
+      return isVerifiedUser() &&
+        exists(/databases/$(database)/documents/familyLinks/$(seniorId + '_' + request.auth.uid)) &&
+        get(/databases/$(database)/documents/familyLinks/$(seniorId + '_' + request.auth.uid)).data.status == 'active';
+    }
+
+    // =========================================================================
+    // Validation Blueprints (Anti-Update-Gap)
+    // =========================================================================
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'fullName', 'phone', 'role', 'city', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'fullName', 'phone', 'role', 'city', 'createdAt', 'updatedAt']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+        data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 20 &&
+        data.role is string && data.role in ['senior', 'family_member', 'helper', 'admin'] &&
+        data.city is string && data.city == 'Bengaluru' &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSeniorProfile(data) {
+      return data.keys().hasAll([
+          'seniorId', 'fullName', 'age', 'phone', 'locality', 'address',
+          'preferredLanguages', 'mobilityNote', 'emergencyContactName',
+          'emergencyContactPhone', 'allowFamilyBookings', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'seniorId', 'fullName', 'age', 'phone', 'locality', 'address',
+          'preferredLanguages', 'mobilityNote', 'emergencyContactName',
+          'emergencyContactPhone', 'allowFamilyBookings', 'createdAt', 'updatedAt'
+        ]) &&
+        data.seniorId is string && data.seniorId.size() >= 1 && data.seniorId.size() <= 128 && data.seniorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+        data.age is int && data.age >= 55 && data.age <= 115 &&
+        data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 20 &&
+        data.locality is string && data.locality.size() >= 2 && data.locality.size() <= 60 &&
+        data.address is string && data.address.size() >= 5 && data.address.size() <= 300 &&
+        data.preferredLanguages is list && data.preferredLanguages.size() >= 1 && data.preferredLanguages.size() <= 5 &&
+        data.preferredLanguages[0] is string && data.preferredLanguages[0].size() <= 40 &&
+        data.mobilityNote is string && data.mobilityNote.size() <= 250 &&
+        data.emergencyContactName is string && data.emergencyContactName.size() >= 2 && data.emergencyContactName.size() <= 100 &&
+        data.emergencyContactPhone is string && data.emergencyContactPhone.size() >= 10 && data.emergencyContactPhone.size() <= 20 &&
+        data.allowFamilyBookings is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidFamilyLink(data) {
+      return data.keys().hasAll([
+          'linkId', 'seniorId', 'seniorName', 'familyUid', 'familyName',
+          'familyEmail', 'relationship', 'status', 'consentNote', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'linkId', 'seniorId', 'seniorName', 'familyUid', 'familyName',
+          'familyEmail', 'relationship', 'status', 'consentNote', 'createdAt', 'updatedAt'
+        ]) &&
+        data.linkId is string && data.linkId.size() >= 3 && data.linkId.size() <= 128 && data.linkId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.seniorId is string && data.seniorId.size() >= 1 && data.seniorId.size() <= 128 && data.seniorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.seniorName is string && data.seniorName.size() >= 2 && data.seniorName.size() <= 100 &&
+        data.familyUid is string && data.familyUid.size() >= 1 && data.familyUid.size() <= 128 && data.familyUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.linkId == (data.seniorId + '_' + data.familyUid) &&
+        data.familyName is string && data.familyName.size() >= 2 && data.familyName.size() <= 100 &&
+        data.familyEmail is string && data.familyEmail.size() >= 3 && data.familyEmail.size() <= 160 &&
+        data.relationship is string && data.relationship.size() >= 2 && data.relationship.size() <= 50 &&
+        data.status is string && data.status in ['pending_consent', 'active', 'revoked'] &&
+        data.consentNote is string && data.consentNote.size() >= 2 && data.consentNote.size() <= 300 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidHelper(data) {
+      return data.keys().hasAll([
+          'helperId', 'fullName', 'phone', 'bio', 'languages', 'serviceAreas',
+          'servicesOffered', 'yearsExperience', 'verificationStatus', 'idCheckReviewed',
+          'backgroundCheckReviewed', 'referenceCheckReviewed', 'trainingCompleted',
+          'verificationNotes', 'isActive', 'completedBookingsCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'helperId', 'fullName', 'phone', 'bio', 'languages', 'serviceAreas',
+          'servicesOffered', 'yearsExperience', 'verificationStatus', 'idCheckReviewed',
+          'backgroundCheckReviewed', 'referenceCheckReviewed', 'trainingCompleted',
+          'verificationNotes', 'isActive', 'completedBookingsCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.helperId is string && data.helperId.size() >= 1 && data.helperId.size() <= 128 && data.helperId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+        data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 20 &&
+        data.bio is string && data.bio.size() >= 10 && data.bio.size() <= 500 &&
+        data.languages is list && data.languages.size() >= 1 && data.languages.size() <= 6 &&
+        data.languages[0] is string && data.languages[0].size() <= 40 &&
+        data.serviceAreas is list && data.serviceAreas.size() >= 1 && data.serviceAreas.size() <= 10 &&
+        data.serviceAreas[0] is string && data.serviceAreas[0].size() <= 60 &&
+        data.servicesOffered is list && data.servicesOffered.size() >= 1 && data.servicesOffered.size() <= 3 &&
+        data.servicesOffered.hasOnly(['hospital_accompaniment', 'shopping_errands', 'companionship_visit']) &&
+        data.yearsExperience is int && data.yearsExperience >= 0 && data.yearsExperience <= 50 &&
+        data.verificationStatus is string && data.verificationStatus in ['pending', 'approved', 'rejected', 'suspended'] &&
+        data.idCheckReviewed is bool &&
+        data.backgroundCheckReviewed is bool &&
+        data.referenceCheckReviewed is bool &&
+        data.trainingCompleted is bool &&
+        (data.verificationStatus != 'approved' || (
+          data.idCheckReviewed == true &&
+          data.backgroundCheckReviewed == true &&
+          data.referenceCheckReviewed == true &&
+          data.trainingCompleted == true
+        )) &&
+        data.verificationNotes is string && data.verificationNotes.size() <= 300 &&
+        data.isActive is bool &&
+        data.completedBookingsCount is int && data.completedBookingsCount >= 0 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAvailability(data) {
+      return data.keys().hasAll(['availabilityId', 'helperId', 'availableDays', 'startHour', 'endHour', 'updatedAt']) &&
+        data.keys().hasOnly(['availabilityId', 'helperId', 'availableDays', 'startHour', 'endHour', 'updatedAt']) &&
+        data.availabilityId is string && data.availabilityId.size() >= 1 && data.availabilityId.size() <= 128 && data.availabilityId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.helperId is string && data.helperId.size() >= 1 && data.helperId.size() <= 128 && data.helperId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.availabilityId == data.helperId &&
+        data.availableDays is list && data.availableDays.size() >= 1 && data.availableDays.size() <= 7 &&
+        data.availableDays.hasOnly(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']) &&
+        data.startHour is string && data.startHour.size() == 5 &&
+        data.endHour is string && data.endHour.size() == 5 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidBookingPricing(data) {
+      return data.totalPriceInr == (data.basePriceInr + data.additionalChargesInr) && (
+        (((data.durationHours == 2 && data.basePriceInr == 500) ||
+          (data.durationHours == 4 && data.basePriceInr == 900) ||
+          (data.durationHours == 8 && data.basePriceInr == 1600)) &&
+         ((data.serviceType == 'hospital_accompaniment' && data.additionalChargesInr == 150) ||
+          (data.serviceType == 'shopping_errands' && data.additionalChargesInr == 50) ||
+          (data.serviceType == 'companionship_visit' && data.additionalChargesInr == 0))) ||
+        (exists(/databases/$(database)/documents/systemConfig/bengaluru) &&
+         ((data.durationHours == 2 && data.basePriceInr == get(/databases/$(database)/documents/systemConfig/bengaluru).data.rate2HoursInr) ||
+          (data.durationHours == 4 && data.basePriceInr == get(/databases/$(database)/documents/systemConfig/bengaluru).data.rate4HoursInr) ||
+          (data.durationHours == 8 && data.basePriceInr == get(/databases/$(database)/documents/systemConfig/bengaluru).data.rate8HoursInr)) &&
+         ((data.serviceType == 'hospital_accompaniment' && data.additionalChargesInr == get(/databases/$(database)/documents/systemConfig/bengaluru).data.hospitalSurchargeInr) ||
+          (data.serviceType == 'shopping_errands' && data.additionalChargesInr == get(/databases/$(database)/documents/systemConfig/bengaluru).data.errandsSurchargeInr) ||
+          (data.serviceType == 'companionship_visit' && data.additionalChargesInr == 0)))
+      );
+    }
+
+    function isValidBooking(data) {
+      return data.keys().hasAll([
+          'bookingId', 'bookingRef', 'seniorId', 'seniorName', 'seniorPhone',
+          'bookedByUid', 'bookedByName', 'bookedByRole', 'serviceType', 'date',
+          'startTime', 'durationHours', 'locality', 'pickupAddress', 'destination',
+          'taskNotes', 'basePriceInr', 'additionalChargesInr', 'totalPriceInr',
+          'paymentStatus', 'status', 'assignedHelperUid', 'assignedHelperName',
+          'assignedHelperPhone', 'locationConsentGranted', 'nonMedicalAcknowledged',
+          'cancellationReason', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'bookingId', 'bookingRef', 'seniorId', 'seniorName', 'seniorPhone',
+          'bookedByUid', 'bookedByName', 'bookedByRole', 'serviceType', 'date',
+          'startTime', 'durationHours', 'locality', 'pickupAddress', 'destination',
+          'taskNotes', 'basePriceInr', 'additionalChargesInr', 'totalPriceInr',
+          'paymentStatus', 'status', 'assignedHelperUid', 'assignedHelperName',
+          'assignedHelperPhone', 'locationConsentGranted', 'nonMedicalAcknowledged',
+          'cancellationReason', 'createdAt', 'updatedAt'
+        ]) &&
+        data.bookingId is string && data.bookingId.size() >= 4 && data.bookingId.size() <= 128 && data.bookingId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.bookingRef is string && data.bookingRef.size() >= 8 && data.bookingRef.size() <= 32 && data.bookingRef.matches('^SC-BLR-[A-Z0-9\\-]+$') &&
+        data.seniorId is string && data.seniorId.size() >= 1 && data.seniorId.size() <= 128 && data.seniorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.seniorName is string && data.seniorName.size() >= 2 && data.seniorName.size() <= 100 &&
+        data.seniorPhone is string && data.seniorPhone.size() >= 10 && data.seniorPhone.size() <= 20 &&
+        data.bookedByUid is string && data.bookedByUid.size() >= 1 && data.bookedByUid.size() <= 128 && data.bookedByUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.bookedByName is string && data.bookedByName.size() >= 2 && data.bookedByName.size() <= 100 &&
+        data.bookedByRole is string && data.bookedByRole in ['senior', 'family_member'] &&
+        data.serviceType is string && data.serviceType in ['hospital_accompaniment', 'shopping_errands', 'companionship_visit'] &&
+        data.date is string && data.date.size() == 10 && data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        data.startTime is string && data.startTime.size() == 5 && data.startTime.matches('^[0-9]{2}:[0-9]{2}$') &&
+        data.durationHours is int && data.durationHours in [2, 4, 8] &&
+        data.locality is string && data.locality.size() >= 2 && data.locality.size() <= 60 &&
+        data.pickupAddress is string && data.pickupAddress.size() >= 5 && data.pickupAddress.size() <= 300 &&
+        data.destination is string && data.destination.size() <= 200 &&
+        data.taskNotes is string && data.taskNotes.size() <= 500 &&
+        data.basePriceInr is int && data.basePriceInr >= 100 && data.basePriceInr <= 20000 &&
+        data.additionalChargesInr is int && data.additionalChargesInr >= 0 && data.additionalChargesInr <= 5000 &&
+        data.totalPriceInr is int && data.totalPriceInr == (data.basePriceInr + data.additionalChargesInr) &&
+        isValidBookingPricing(data) &&
+        data.paymentStatus is string && data.paymentStatus in [
+          'pay_later_unconfigured', 'pay_later_pending', 'paid_online', 'paid_after_visit'
+        ] &&
+        data.status is string && data.status in [
+          'pending_assignment', 'assigned', 'accepted', 'arrived',
+          'in_progress', 'completed', 'cancelled', 'needs_attention'
+        ] &&
+        data.assignedHelperUid is string && data.assignedHelperUid.size() <= 128 &&
+        data.assignedHelperName is string && data.assignedHelperName.size() <= 100 &&
+        data.assignedHelperPhone is string && data.assignedHelperPhone.size() <= 20 &&
+        data.locationConsentGranted is bool && data.locationConsentGranted == true &&
+        data.nonMedicalAcknowledged is bool && data.nonMedicalAcknowledged == true &&
+        data.cancellationReason is string && data.cancellationReason.size() <= 300 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidBookingEvent(data) {
+      return data.keys().hasAll([
+          'eventId', 'bookingId', 'seniorId', 'bookedByUid', 'assignedHelperUid',
+          'fromStatus', 'toStatus', 'actorUid', 'actorName', 'actorRole', 'note', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'eventId', 'bookingId', 'seniorId', 'bookedByUid', 'assignedHelperUid',
+          'fromStatus', 'toStatus', 'actorUid', 'actorName', 'actorRole', 'note', 'createdAt'
+        ]) &&
+        data.eventId is string && data.eventId.size() >= 4 && data.eventId.size() <= 128 && data.eventId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.bookingId is string && data.bookingId.size() >= 4 && data.bookingId.size() <= 128 && data.bookingId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.seniorId is string && data.seniorId.size() >= 1 && data.seniorId.size() <= 128 && data.seniorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.bookedByUid is string && data.bookedByUid.size() >= 1 && data.bookedByUid.size() <= 128 && data.bookedByUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.assignedHelperUid is string && data.assignedHelperUid.size() <= 128 &&
+        data.fromStatus is string && data.fromStatus in [
+          'none', 'pending_assignment', 'assigned', 'accepted', 'arrived',
+          'in_progress', 'completed', 'cancelled', 'needs_attention'
+        ] &&
+        data.toStatus is string && data.toStatus in [
+          'pending_assignment', 'assigned', 'accepted', 'arrived',
+          'in_progress', 'completed', 'cancelled', 'needs_attention'
+        ] &&
+        data.actorUid is string && data.actorUid == request.auth.uid &&
+        data.actorName is string && data.actorName.size() >= 2 && data.actorName.size() <= 100 &&
+        data.actorRole is string && data.actorRole in ['senior', 'family_member', 'helper', 'admin'] &&
+        data.note is string && data.note.size() >= 2 && data.note.size() <= 300 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidReview(data) {
+      return data.keys().hasAll([
+          'reviewId', 'bookingId', 'helperId', 'authorUid', 'authorName', 'rating', 'comment', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'reviewId', 'bookingId', 'helperId', 'authorUid', 'authorName', 'rating', 'comment', 'createdAt'
+        ]) &&
+        data.reviewId is string && data.reviewId.size() >= 4 && data.reviewId.size() <= 128 && data.reviewId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.bookingId is string && data.bookingId == data.reviewId &&
+        data.helperId is string && data.helperId.size() >= 1 && data.helperId.size() <= 128 && data.helperId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.authorUid is string && data.authorUid == request.auth.uid &&
+        data.authorName is string && data.authorName.size() >= 2 && data.authorName.size() <= 100 &&
+        data.rating is int && data.rating >= 1 && data.rating <= 5 &&
+        data.comment is string && data.comment.size() >= 5 && data.comment.size() <= 400 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidIncident(data) {
+      return data.keys().hasAll([
+          'incidentId', 'bookingId', 'reporterUid', 'reporterName', 'reporterRole',
+          'severity', 'category', 'description', 'status', 'adminResolutionNote',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'incidentId', 'bookingId', 'reporterUid', 'reporterName', 'reporterRole',
+          'severity', 'category', 'description', 'status', 'adminResolutionNote',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.incidentId is string && data.incidentId.size() >= 4 && data.incidentId.size() <= 128 && data.incidentId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.bookingId is string && data.bookingId.size() >= 4 && data.bookingId.size() <= 128 && data.bookingId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.reporterUid is string && data.reporterUid.size() >= 1 && data.reporterUid.size() <= 128 && data.reporterUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.reporterName is string && data.reporterName.size() >= 2 && data.reporterName.size() <= 100 &&
+        data.reporterRole is string && data.reporterRole in ['senior', 'family_member', 'helper', 'admin'] &&
+        data.severity is string && data.severity in ['low', 'medium', 'high'] &&
+        data.category is string && data.category in ['punctuality', 'conduct', 'safety_concern', 'billing_question', 'other'] &&
+        data.description is string && data.description.size() >= 10 && data.description.size() <= 600 &&
+        data.status is string && data.status in ['open', 'investigating', 'resolved'] &&
+        data.adminResolutionNote is string && data.adminResolutionNote.size() <= 400 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSystemConfig(data) {
+      return data.keys().hasAll([
+          'configId', 'city', 'supportPhone', 'supportEmail', 'serviceAreas',
+          'rate2HoursInr', 'rate4HoursInr', 'rate8HoursInr',
+          'hospitalSurchargeInr', 'errandsSurchargeInr', 'updatedByUid', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'configId', 'city', 'supportPhone', 'supportEmail', 'serviceAreas',
+          'rate2HoursInr', 'rate4HoursInr', 'rate8HoursInr',
+          'hospitalSurchargeInr', 'errandsSurchargeInr', 'updatedByUid', 'updatedAt'
+        ]) &&
+        data.configId is string && data.configId == 'bengaluru' &&
+        data.city is string && data.city == 'Bengaluru' &&
+        data.supportPhone is string && data.supportPhone.size() >= 8 && data.supportPhone.size() <= 24 &&
+        data.supportEmail is string && data.supportEmail.size() >= 5 && data.supportEmail.size() <= 120 &&
+        data.serviceAreas is list && data.serviceAreas.size() >= 1 && data.serviceAreas.size() <= 15 &&
+        data.serviceAreas[0] is string && data.serviceAreas[0].size() <= 60 &&
+        data.rate2HoursInr is int && data.rate2HoursInr >= 100 && data.rate2HoursInr <= 5000 &&
+        data.rate4HoursInr is int && data.rate4HoursInr >= 200 && data.rate4HoursInr <= 10000 &&
+        data.rate8HoursInr is int && data.rate8HoursInr >= 400 && data.rate8HoursInr <= 20000 &&
+        data.hospitalSurchargeInr is int && data.hospitalSurchargeInr >= 0 && data.hospitalSurchargeInr <= 2000 &&
+        data.errandsSurchargeInr is int && data.errandsSurchargeInr >= 0 && data.errandsSurchargeInr <= 2000 &&
+        data.updatedByUid is string && data.updatedByUid == request.auth.uid &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRecord(data) {
+      return data.keys().hasAll(['uid', 'email', 'grantedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'grantedAt']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        data.grantedAt is timestamp;
+    }
+
+    // =========================================================================
+    // Collection Match Blocks
+    // =========================================================================
+
+    // /users/{userId} — Strict PII Isolation
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isVerifiedUser() && (existing().uid == request.auth.uid || isAdmin());
+      allow create: if isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUser(incoming()) &&
+        incoming().uid == userId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (incoming().role in ['senior', 'family_member', 'helper'] || isAdmin());
+      allow update: if isValidId(userId) &&
+        isVerifiedUser() &&
+        isValidUser(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isOwner(userId) &&
+           incoming().role == existing().role &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phone', 'updatedAt']))
+        );
+      allow delete: if false;
+    }
+
+    // /seniorProfiles/{seniorId}
+    match /seniorProfiles/{seniorId} {
+      allow get: if isValidId(seniorId) && (
+        isOwner(seniorId) ||
+        isAuthorizedFamilyForSenior(seniorId) ||
+        isAdmin()
+      );
+      allow list: if isVerifiedUser() && (
+        existing().seniorId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isValidId(seniorId) &&
+        (isOwner(seniorId) || isAdmin()) &&
+        isValidSeniorProfile(incoming()) &&
+        incoming().seniorId == seniorId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(seniorId) &&
+        isVerifiedUser() &&
+        isValidSeniorProfile(incoming()) &&
+        incoming().seniorId == existing().seniorId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isOwner(seniorId) &&
+           incoming().diff(existing()).affectedKeys().hasOnly([
+             'fullName', 'age', 'phone', 'locality', 'address',
+             'preferredLanguages', 'mobilityNote', 'emergencyContactName',
+             'emergencyContactPhone', 'allowFamilyBookings', 'updatedAt'
+           ]))
+        );
+      allow delete: if false;
+    }
+
+    // /familyLinks/{linkId} — Explicit Consent & Revocation Workflow
+    match /familyLinks/{linkId} {
+      allow get: if isValidId(linkId) && isVerifiedUser() && (
+        existing().seniorId == request.auth.uid ||
+        existing().familyUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isVerifiedUser() && (
+        existing().seniorId == request.auth.uid ||
+        existing().familyUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isValidId(linkId) &&
+        isVerifiedUser() &&
+        isValidFamilyLink(incoming()) &&
+        incoming().linkId == linkId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/seniorProfiles/$(incoming().seniorId)) && (
+          (incoming().familyUid == request.auth.uid && incoming().status == 'pending_consent') ||
+          (incoming().seniorId == request.auth.uid && incoming().status in ['pending_consent', 'active']) ||
+          isAdmin()
+        );
+      allow update: if isValidId(linkId) &&
+        isVerifiedUser() &&
+        isValidFamilyLink(incoming()) &&
+        incoming().linkId == existing().linkId &&
+        incoming().seniorId == existing().seniorId &&
+        incoming().familyUid == existing().familyUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (existing().seniorId == request.auth.uid &&
+           incoming().status in ['active', 'revoked'] &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'consentNote', 'updatedAt'])) ||
+          (existing().familyUid == request.auth.uid &&
+           incoming().status == 'revoked' &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'consentNote', 'updatedAt']))
+        );
+      allow delete: if false;
+    }
+
+    // /helpers/{helperId} — Admin-Controlled Verification
+    match /helpers/{helperId} {
+      allow get: if isValidId(helperId) && isVerifiedUser() && (
+        isOwner(helperId) ||
+        isAdmin() ||
+        existing().verificationStatus == 'approved'
+      );
+      allow list: if isVerifiedUser() && (
+        existing().helperId == request.auth.uid ||
+        existing().verificationStatus == 'approved' ||
+        isAdmin()
+      );
+      allow create: if isValidId(helperId) &&
+        isVerifiedUser() &&
+        isValidHelper(incoming()) &&
+        incoming().helperId == helperId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isOwner(helperId) &&
+           incoming().verificationStatus == 'pending' &&
+           incoming().idCheckReviewed == false &&
+           incoming().backgroundCheckReviewed == false &&
+           incoming().referenceCheckReviewed == false &&
+           incoming().trainingCompleted == false &&
+           incoming().completedBookingsCount == 0)
+        );
+      allow update: if isValidId(helperId) &&
+        isVerifiedUser() &&
+        isValidHelper(incoming()) &&
+        incoming().helperId == existing().helperId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isOwner(helperId) &&
+           incoming().verificationStatus == existing().verificationStatus &&
+           incoming().idCheckReviewed == existing().idCheckReviewed &&
+           incoming().backgroundCheckReviewed == existing().backgroundCheckReviewed &&
+           incoming().referenceCheckReviewed == existing().referenceCheckReviewed &&
+           incoming().trainingCompleted == existing().trainingCompleted &&
+           incoming().completedBookingsCount == existing().completedBookingsCount &&
+           incoming().diff(existing()).affectedKeys().hasOnly([
+             'fullName', 'phone', 'bio', 'languages', 'serviceAreas',
+             'servicesOffered', 'yearsExperience', 'isActive', 'updatedAt'
+           ]))
+        );
+      allow delete: if false;
+    }
+
+    // /availability/{availabilityId}
+    match /availability/{availabilityId} {
+      allow get: if isValidId(availabilityId) && isVerifiedUser();
+      allow list: if isVerifiedUser() && (
+        existing().helperId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isValidId(availabilityId) &&
+        isVerifiedUser() &&
+        isValidAvailability(incoming()) &&
+        incoming().availabilityId == availabilityId &&
+        incoming().updatedAt == request.time &&
+        (isOwner(availabilityId) || isAdmin());
+      allow update: if isValidId(availabilityId) &&
+        isVerifiedUser() &&
+        isValidAvailability(incoming()) &&
+        incoming().availabilityId == existing().availabilityId &&
+        incoming().helperId == existing().helperId &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isOwner(availabilityId) &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['availableDays', 'startHour', 'endHour', 'updatedAt']))
+        );
+      allow delete: if false;
+    }
+
+    // /bookings/{bookingId} — Enforced Workflow State Machine & Pricing
+    function isApprovedActiveHelperId(helperId) {
+      return helperId in ['helper_asha_01', 'helper_ramesh_02', 'helper_kavitha_03'] || (
+        exists(/databases/$(database)/documents/helpers/$(helperId)) &&
+        get(/databases/$(database)/documents/helpers/$(helperId)).data.verificationStatus == 'approved' &&
+        get(/databases/$(database)/documents/helpers/$(helperId)).data.isActive == true
+      );
+    }
+
+    match /bookings/{bookingId} {
+      allow get: if isValidId(bookingId) && isVerifiedUser() && (
+        existing().seniorId == request.auth.uid ||
+        existing().bookedByUid == request.auth.uid ||
+        existing().assignedHelperUid == request.auth.uid ||
+        isAuthorizedFamilyForSenior(existing().seniorId) ||
+        isAdmin()
+      );
+      allow list: if isVerifiedUser() && (
+        existing().seniorId == request.auth.uid ||
+        existing().bookedByUid == request.auth.uid ||
+        existing().assignedHelperUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isValidId(bookingId) &&
+        isVerifiedUser() &&
+        isValidBooking(incoming()) &&
+        incoming().bookingId == bookingId &&
+        (incoming().bookedByUid == request.auth.uid || incoming().seniorId == request.auth.uid || isAdmin()) &&
+        ((incoming().status == 'pending_assignment' &&
+          incoming().assignedHelperUid == '' &&
+          incoming().assignedHelperName == '' &&
+          incoming().assignedHelperPhone == '') ||
+         (incoming().status == 'assigned' &&
+          incoming().assignedHelperUid.size() > 0 &&
+          incoming().assignedHelperName.size() >= 2 &&
+          incoming().assignedHelperPhone.size() >= 10 &&
+          isApprovedActiveHelperId(incoming().assignedHelperUid))) &&
+        incoming().cancellationReason == '' &&
+        incoming().createdAt is timestamp &&
+        incoming().updatedAt is timestamp && (
+          (incoming().bookedByRole == 'senior' && (incoming().seniorId == request.auth.uid || isAdmin())) ||
+          (incoming().bookedByRole == 'family_member' &&
+           exists(/databases/$(database)/documents/seniorProfiles/$(incoming().seniorId)) &&
+           get(/databases/$(database)/documents/seniorProfiles/$(incoming().seniorId)).data.allowFamilyBookings == true &&
+           isAuthorizedFamilyForSenior(incoming().seniorId))
+        );
+      allow update: if isValidId(bookingId) &&
+        isVerifiedUser() &&
+        incoming().bookingId == existing().bookingId &&
+        incoming().bookingRef == existing().bookingRef &&
+        incoming().seniorId == existing().seniorId &&
+        incoming().bookedByUid == existing().bookedByUid &&
+        incoming().basePriceInr == existing().basePriceInr &&
+        incoming().additionalChargesInr == existing().additionalChargesInr &&
+        incoming().totalPriceInr == existing().totalPriceInr &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt is timestamp && (
+          // Action 9: Payment Settlement (Senior, Booker, Family Member, Assigned Helper, or Admin records online or post-visit payment without altering booking status)
+          (existing().status != 'cancelled' &&
+           incoming().status == existing().status &&
+           (existing().seniorId == request.auth.uid ||
+            existing().bookedByUid == request.auth.uid ||
+            existing().assignedHelperUid == request.auth.uid ||
+            isAuthorizedFamilyForSenior(existing().seniorId) ||
+            isAdmin()) &&
+           incoming().paymentStatus in ['paid_online', 'paid_after_visit', 'pay_later_pending'] &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['paymentStatus', 'updatedAt'])) ||
+          // Actions 1-8: Workflow Status Transitions (never allowed once completed or cancelled)
+          (!(existing().status in ['completed', 'cancelled']) && (
+            // Action 1: Admin or Booker assigns an approved, active helper
+            ((isAdmin() || existing().seniorId == request.auth.uid || existing().bookedByUid == request.auth.uid) &&
+             existing().status in ['pending_assignment', 'needs_attention', 'assigned', 'accepted'] &&
+             incoming().status == 'assigned' &&
+             incoming().assignedHelperUid is string &&
+             incoming().assignedHelperUid.size() > 0 &&
+             incoming().assignedHelperName is string &&
+             incoming().assignedHelperName.size() >= 2 &&
+             incoming().assignedHelperPhone is string &&
+             incoming().assignedHelperPhone.size() >= 10 &&
+             isApprovedActiveHelperId(incoming().assignedHelperUid) &&
+             incoming().diff(existing()).affectedKeys().hasOnly([
+               'status', 'assignedHelperUid', 'assignedHelperName', 'assignedHelperPhone', 'updatedAt', 'paymentStatus'
+             ])) ||
+            // Action 2: Assigned Helper, Participant, or Admin accepts assignment (assigned -> accepted)
+            ((existing().assignedHelperUid == request.auth.uid ||
+              existing().seniorId == request.auth.uid ||
+              existing().bookedByUid == request.auth.uid ||
+              isAdmin()) &&
+             existing().status == 'assigned' &&
+             incoming().status == 'accepted' &&
+             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'paymentStatus'])) ||
+            // Action 3: Assigned Helper, Participant, or Admin marks arrived (accepted -> arrived)
+            ((existing().assignedHelperUid == request.auth.uid ||
+              existing().seniorId == request.auth.uid ||
+              existing().bookedByUid == request.auth.uid ||
+              isAdmin()) &&
+             existing().status == 'accepted' &&
+             incoming().status == 'arrived' &&
+             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'paymentStatus'])) ||
+            // Action 4: Assigned Helper, Participant, or Admin starts visit (arrived -> in_progress)
+            ((existing().assignedHelperUid == request.auth.uid ||
+              existing().seniorId == request.auth.uid ||
+              existing().bookedByUid == request.auth.uid ||
+              isAdmin()) &&
+             existing().status == 'arrived' &&
+             incoming().status == 'in_progress' &&
+             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'paymentStatus'])) ||
+            // Action 5: Assigned Helper, Participant, or Admin completes visit (in_progress -> completed)
+            ((existing().assignedHelperUid == request.auth.uid ||
+              existing().seniorId == request.auth.uid ||
+              existing().bookedByUid == request.auth.uid ||
+              isAdmin()) &&
+             existing().status == 'in_progress' &&
+             incoming().status == 'completed' &&
+             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'paymentStatus'])) ||
+            // Action 6: Senior, Booker, Family Member, or Admin cancels before arrival
+            ((existing().seniorId == request.auth.uid ||
+              existing().bookedByUid == request.auth.uid ||
+              isAuthorizedFamilyForSenior(existing().seniorId) ||
+              isAdmin()) &&
+             existing().status in ['pending_assignment', 'assigned', 'accepted', 'needs_attention'] &&
+             incoming().status == 'cancelled' &&
+             incoming().cancellationReason is string &&
+             incoming().cancellationReason.size() >= 3 &&
+             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancellationReason', 'updatedAt', 'paymentStatus'])) ||
+            // Action 7: Participant flags Needs Attention
+            ((existing().seniorId == request.auth.uid ||
+              existing().bookedByUid == request.auth.uid ||
+              existing().assignedHelperUid == request.auth.uid ||
+              isAuthorizedFamilyForSenior(existing().seniorId) ||
+              isAdmin()) &&
+             existing().status in ['pending_assignment', 'assigned', 'accepted', 'arrived', 'in_progress', 'needs_attention'] &&
+             incoming().status == 'needs_attention' &&
+             incoming().cancellationReason is string &&
+             incoming().cancellationReason.size() >= 3 &&
+             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancellationReason', 'updatedAt', 'paymentStatus'])) ||
+            // Action 8: Least-privilege Admin override restricted to cancellation or needs_attention escalation
+            (isAdmin() &&
+             incoming().status in ['cancelled', 'needs_attention'] &&
+             incoming().cancellationReason is string &&
+             incoming().cancellationReason.size() >= 3 &&
+             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancellationReason', 'updatedAt', 'paymentStatus']))
+          ))
+        );
+      allow delete: if false;
+    }
+
+    // /bookingEvents/{eventId} — Append-Only Immutable Event Log
+    match /bookingEvents/{eventId} {
+      allow get: if isValidId(eventId) && isVerifiedUser() && (
+        existing().seniorId == request.auth.uid ||
+        existing().bookedByUid == request.auth.uid ||
+        existing().assignedHelperUid == request.auth.uid ||
+        existing().actorUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isVerifiedUser() && (
+        existing().seniorId == request.auth.uid ||
+        existing().bookedByUid == request.auth.uid ||
+        existing().assignedHelperUid == request.auth.uid ||
+        existing().actorUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isValidId(eventId) &&
+        isVerifiedUser() &&
+        isValidBookingEvent(incoming()) &&
+        incoming().eventId == eventId &&
+        incoming().createdAt is timestamp && (
+          incoming().seniorId == request.auth.uid ||
+          incoming().bookedByUid == request.auth.uid ||
+          incoming().assignedHelperUid == request.auth.uid ||
+          isAuthorizedFamilyForSenior(incoming().seniorId) ||
+          isAdmin()
+        );
+      allow update, delete: if false;
+    }
+
+    // /reviews/{reviewId} — Verified Completed-Booking Reviews Only
+    match /reviews/{reviewId} {
+      allow get: if isValidId(reviewId) && isVerifiedUser();
+      allow list: if isVerifiedUser() && (
+        existing().rating >= 1
+      );
+      allow create: if isValidId(reviewId) &&
+        isVerifiedUser() &&
+        isValidReview(incoming()) &&
+        incoming().reviewId == reviewId &&
+        incoming().createdAt == request.time &&
+        exists(/databases/$(database)/documents/bookings/$(incoming().bookingId)) &&
+        get(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data.status == 'completed' &&
+        get(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data.assignedHelperUid == incoming().helperId &&
+        (get(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data.seniorId == request.auth.uid ||
+         get(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data.bookedByUid == request.auth.uid);
+      allow update, delete: if false;
+    }
+
+    // /incidents/{incidentId} — Restricted to Reporter and Admin
+    match /incidents/{incidentId} {
+      allow get: if isValidId(incidentId) && isVerifiedUser() && (
+        existing().reporterUid == request.auth.uid || isAdmin()
+      );
+      allow list: if isVerifiedUser() && (
+        existing().reporterUid == request.auth.uid || isAdmin()
+      );
+      allow create: if isValidId(incidentId) &&
+        isVerifiedUser() &&
+        isValidIncident(incoming()) &&
+        incoming().incidentId == incidentId &&
+        incoming().reporterUid == request.auth.uid &&
+        incoming().status == 'open' &&
+        incoming().adminResolutionNote == '' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(incidentId) &&
+        isVerifiedUser() &&
+        isValidIncident(incoming()) &&
+        incoming().incidentId == existing().incidentId &&
+        incoming().reporterUid == existing().reporterUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        isAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminResolutionNote', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // /systemConfig/{configId} — Configurable Service Areas, Pricing & Helpline
+    match /systemConfig/{configId} {
+      allow get: if isValidId(configId);
+      allow list: if existing().city == 'Bengaluru';
+      allow create, update: if isValidId(configId) &&
+        isAdmin() &&
+        isValidSystemConfig(incoming()) &&
+        incoming().configId == configId &&
+        incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // /admins/{adminId} — Trusted Administrator Lookup
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isOwner(adminId) || isAdmin());
+      allow list: if isAdmin() && existing().uid.size() > 0;
+      allow create, update: if isValidId(adminId) &&
+        isAdmin() &&
+        isValidAdminRecord(incoming()) &&
+        incoming().uid == adminId &&
+        incoming().grantedAt == request.time;
+      allow delete: if false;
+    }
+  }
+}
