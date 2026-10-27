@@ -385,24 +385,27 @@ service cloud.firestore {
       allow get: if isValidId(seniorId) && (
         isOwner(seniorId) ||
         isAuthorizedFamilyForSenior(seniorId) ||
-        isAdmin()
+        isAdmin() ||
+        (isVerifiedUser() && (resource == null || resource.data.allowFamilyBookings == true))
       );
       allow list: if isVerifiedUser() && (
         existing().seniorId == request.auth.uid ||
-        isAdmin()
+        isAdmin() ||
+        existing().allowFamilyBookings == true
       );
       allow create: if isValidId(seniorId) &&
-        (isOwner(seniorId) || isAdmin()) &&
+        isVerifiedUser() &&
+        (isOwner(seniorId) || isAdmin() || incoming().allowFamilyBookings == true) &&
         isValidSeniorProfile(incoming()) &&
         incoming().seniorId == seniorId &&
-        incoming().createdAt == request.time &&
-        incoming().updatedAt == request.time;
+        incoming().createdAt is timestamp &&
+        incoming().updatedAt is timestamp;
       allow update: if isValidId(seniorId) &&
         isVerifiedUser() &&
         isValidSeniorProfile(incoming()) &&
         incoming().seniorId == existing().seniorId &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
+        incoming().updatedAt is timestamp && (
           isAdmin() ||
           (isOwner(seniorId) &&
            incoming().diff(existing()).affectedKeys().hasOnly([
@@ -430,10 +433,13 @@ service cloud.firestore {
         isVerifiedUser() &&
         isValidFamilyLink(incoming()) &&
         incoming().linkId == linkId &&
-        incoming().createdAt == request.time &&
-        incoming().updatedAt == request.time &&
+        incoming().createdAt is timestamp &&
+        incoming().updatedAt is timestamp &&
         exists(/databases/$(database)/documents/seniorProfiles/$(incoming().seniorId)) && (
           (incoming().familyUid == request.auth.uid && incoming().status == 'pending_consent') ||
+          (incoming().familyUid == request.auth.uid &&
+           get(/databases/$(database)/documents/seniorProfiles/$(incoming().seniorId)).data.allowFamilyBookings == true &&
+           incoming().status in ['pending_consent', 'active']) ||
           (incoming().seniorId == request.auth.uid && incoming().status in ['pending_consent', 'active']) ||
           isAdmin()
         );
@@ -444,7 +450,7 @@ service cloud.firestore {
         incoming().seniorId == existing().seniorId &&
         incoming().familyUid == existing().familyUid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
+        incoming().updatedAt is timestamp && (
           isAdmin() ||
           (existing().seniorId == request.auth.uid &&
            incoming().status in ['active', 'revoked'] &&

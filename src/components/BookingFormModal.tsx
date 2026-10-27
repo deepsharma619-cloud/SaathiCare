@@ -34,6 +34,12 @@ interface BookingFormModalProps {
   initialServiceType?: ServiceType;
   initialDurationHours?: DurationHours;
   onCreateSeniorProfile: (profile: Omit<SeniorProfile, 'createdAt' | 'updatedAt'>) => Promise<SeniorProfile>;
+  onRequestFamilyLink?: (payload: {
+    seniorId: string;
+    seniorName: string;
+    relationship: string;
+    consentNote: string;
+  }) => Promise<void>;
   onSubmitBooking: (input: {
     seniorProfile: SeniorProfile;
     familyLink: FamilyLink | null;
@@ -66,6 +72,7 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
   initialServiceType = 'hospital_accompaniment',
   initialDurationHours = 4,
   onCreateSeniorProfile,
+  onRequestFamilyLink,
   onSubmitBooking,
   onBookingConfirmed,
 }) => {
@@ -122,6 +129,14 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
   const [profileEmergencyName, setProfileEmergencyName] = useState<string>('');
   const [profileEmergencyPhone, setProfileEmergencyPhone] = useState<string>('+91-98450-44556');
   const [profileCreating, setProfileCreating] = useState<boolean>(false);
+
+  // Family member setup mode (registering senior parent vs linking existing)
+  const [familySetupTab, setFamilySetupTab] = useState<'register' | 'link'>(
+    availableSeniors.some((s) => s.allowFamilyBookings) ? 'link' : 'register'
+  );
+  const [familyRelationship, setFamilyRelationship] = useState<string>('Son / Daughter');
+  const [familyConsentConfirmed, setFamilyConsentConfirmed] = useState<boolean>(true);
+  const [forceShowRegisterForm, setForceShowRegisterForm] = useState<boolean>(false);
 
   useEffect(() => {
     setServiceType(initialServiceType);
@@ -221,8 +236,13 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
 
     setProfileCreating(true);
     try {
+      const effectiveSeniorId =
+        currentUser.role === 'family_member'
+          ? `senior_${Date.now()}`
+          : currentUser.uid;
+
       const created = await onCreateSeniorProfile({
-        seniorId: currentUser.uid,
+        seniorId: effectiveSeniorId,
         fullName: profileFullName.trim(),
         age: Math.min(115, Math.max(55, Number(profileAge) || 70)),
         phone: profilePhone.trim(),
@@ -230,16 +250,51 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
         address: profileAddress.trim(),
         preferredLanguages: ['Kannada', 'English'],
         mobilityNote: profileMobility.trim() || 'Prefers unhurried accompaniment',
-        emergencyContactName: profileEmergencyName.trim(),
-        emergencyContactPhone: profileEmergencyPhone.trim(),
+        emergencyContactName:
+          profileEmergencyName.trim() ||
+          (currentUser.role === 'family_member' ? currentUser.fullName : 'Emergency Contact'),
+        emergencyContactPhone:
+          profileEmergencyPhone.trim() ||
+          (currentUser.role === 'family_member' ? currentUser.phone : '+91-98450-44556'),
         allowFamilyBookings: true,
       });
       setSelectedSeniorId(created.seniorId);
       setLocality(created.locality);
       setPickupAddress(created.address);
+      setForceShowRegisterForm(false);
     } catch (err) {
       setFormError(
         err instanceof Error ? err.message : 'Could not save Senior Citizen profile.'
+      );
+    } finally {
+      setProfileCreating(false);
+    }
+  };
+
+  const handleConnectExistingSenior = async (senior: SeniorProfile) => {
+    if (!onRequestFamilyLink) {
+      setSelectedSeniorId(senior.seniorId);
+      setLocality(senior.locality);
+      setPickupAddress(senior.address);
+      setForceShowRegisterForm(false);
+      return;
+    }
+    setFormError(null);
+    setProfileCreating(true);
+    try {
+      await onRequestFamilyLink({
+        seniorId: senior.seniorId,
+        seniorName: senior.fullName,
+        relationship: familyRelationship,
+        consentNote: `Explicit verbal/written consent confirmed by family caregiver ${currentUser.fullName} on ${new Date().toLocaleDateString('en-IN')}.`,
+      });
+      setSelectedSeniorId(senior.seniorId);
+      setLocality(senior.locality);
+      setPickupAddress(senior.address);
+      setForceShowRegisterForm(false);
+    } catch (err) {
+      setFormError(
+        err instanceof Error ? err.message : 'Could not link with senior profile.'
       );
     } finally {
       setProfileCreating(false);
@@ -326,25 +381,341 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
           </div>
         )}
 
-        {eligibleSeniors.length === 0 ? (
+        {eligibleSeniors.length === 0 || forceShowRegisterForm ? (
           currentUser.role === 'family_member' ? (
-            <div className="p-6 bg-[#FAF8F5] border border-[#E7E2DA] rounded-lg space-y-3">
-              <div className="flex items-center gap-2 text-base font-semibold text-[#991B1B]">
-                <ShieldAlert className="w-5 h-5" aria-hidden="true" />
-                <span>Explicit Senior Consent Required for Family Bookings</span>
+            <div className="space-y-6">
+              {/* Family Caregiver Setup Header & Navigation */}
+              <div className="p-5 bg-[#FAF8F5] border border-[#E7E2DA] rounded-xl space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-base font-semibold text-[#1C1917]">
+                    <CheckCircle2 className="w-5 h-5 text-[#14532D]" aria-hidden="true" />
+                    <span>Authorized Family Member Companion Booking Setup</span>
+                  </div>
+                  {eligibleSeniors.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setForceShowRegisterForm(false)}
+                      className="px-3 py-1 bg-white border border-[#D6D0C4] text-[#1C1917] text-xs font-semibold rounded-lg hover:bg-[#FAF8F5]"
+                    >
+                      ← Back to Booking ({eligibleSeniors.length} Senior{eligibleSeniors.length > 1 ? 's' : ''})
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-[#57534E] leading-relaxed">
+                  To coordinate non-medical companion visits on behalf of an elderly relative, you
+                  can either register your senior parent directly below or connect to an existing
+                  senior profile with family booking permission.
+                </p>
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setFamilySetupTab('register')}
+                    className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                      familySetupTab === 'register'
+                        ? 'bg-[#1C1917] text-white shadow-sm'
+                        : 'bg-white border border-[#D6D0C4] text-[#57534E] hover:text-[#1C1917]'
+                    }`}
+                  >
+                    + Register Senior Parent / Loved One
+                  </button>
+                  {availableSeniors.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setFamilySetupTab('link')}
+                      className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                        familySetupTab === 'link'
+                          ? 'bg-[#1C1917] text-white shadow-sm'
+                          : 'bg-white border border-[#D6D0C4] text-[#57534E] hover:text-[#1C1917]'
+                      }`}
+                    >
+                      Connect to Existing Senior Profile ({availableSeniors.length})
+                    </button>
+                  )}
+                </div>
               </div>
-              <p className="text-sm text-[#57534E]">
-                Family access requires explicit consent from the senior citizen. Please request
-                authorization using the Senior Share ID in your dashboard and wait for the senior
-                to approve it.
-              </p>
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 bg-[#1C1917] text-white text-sm font-semibold rounded-lg"
-              >
-                Return to Dashboard
-              </button>
+
+              {familySetupTab === 'register' ? (
+                /* Family Member Registers Senior Parent Form */
+                <form
+                  onSubmit={handleInlineCreateProfile}
+                  className="p-6 bg-[#FAF8F5] border border-[#E7E2DA] rounded-xl space-y-5"
+                >
+                  <div className="border-b border-[#E7E2DA] pb-3">
+                    <p className="text-xs font-semibold text-[#9A3412]">
+                      Step 1 of 2 · Senior Citizen Profile & Caregiver Consent
+                    </p>
+                    <h3 className="text-lg font-bold text-[#1C1917] mt-0.5">
+                      Enter Details for the Senior Citizen You are Booking For
+                    </h3>
+                    <p className="text-xs text-[#57534E] mt-1">
+                      This creates the senior profile and automatically establishes your verified
+                      family caregiver authorization in Cloud Firestore.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                      <label
+                        htmlFor="fam-senior-name"
+                        className="block text-xs font-semibold text-[#1C1917] mb-1"
+                      >
+                        Senior Full Name
+                      </label>
+                      <input
+                        id="fam-senior-name"
+                        type="text"
+                        required
+                        placeholder="e.g. Lakshmi Narasimhan"
+                        value={profileFullName}
+                        onChange={(e) => setProfileFullName(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="fam-senior-age"
+                        className="block text-xs font-semibold text-[#1C1917] mb-1"
+                      >
+                        Age (55–115 yrs)
+                      </label>
+                      <input
+                        id="fam-senior-age"
+                        type="number"
+                        min={55}
+                        max={115}
+                        required
+                        value={profileAge}
+                        onChange={(e) => setProfileAge(Number(e.target.value))}
+                        className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-sm font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="fam-senior-phone"
+                        className="block text-xs font-semibold text-[#1C1917] mb-1"
+                      >
+                        Senior Phone Number
+                      </label>
+                      <input
+                        id="fam-senior-phone"
+                        type="tel"
+                        required
+                        placeholder="+91-98450-11223"
+                        value={profilePhone}
+                        onChange={(e) => setProfilePhone(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-sm font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                      <label
+                        htmlFor="fam-senior-locality"
+                        className="block text-xs font-semibold text-[#1C1917] mb-1"
+                      >
+                        Bengaluru Locality
+                      </label>
+                      <select
+                        id="fam-senior-locality"
+                        value={profileLocality}
+                        onChange={(e) => setProfileLocality(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-sm"
+                      >
+                        {systemConfig.serviceAreas.map((area) => (
+                          <option key={area} value={area}>
+                            {area}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label
+                        htmlFor="fam-senior-address"
+                        className="block text-xs font-semibold text-[#1C1917] mb-1"
+                      >
+                        Complete Pickup Street Address in Bengaluru
+                      </label>
+                      <input
+                        id="fam-senior-address"
+                        type="text"
+                        required
+                        placeholder="e.g. Flat 204, Shanthi Residency, 12th Main, Indiranagar"
+                        value={profileAddress}
+                        onChange={(e) => setProfileAddress(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                      <label
+                        htmlFor="fam-relationship"
+                        className="block text-xs font-semibold text-[#1C1917] mb-1"
+                      >
+                        Your Relationship to Senior
+                      </label>
+                      <input
+                        id="fam-relationship"
+                        type="text"
+                        required
+                        value={familyRelationship}
+                        onChange={(e) => setFamilyRelationship(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="fam-emergency-name"
+                        className="block text-xs font-semibold text-[#1C1917] mb-1"
+                      >
+                        Emergency Contact Name
+                      </label>
+                      <input
+                        id="fam-emergency-name"
+                        type="text"
+                        required
+                        value={profileEmergencyName || currentUser.fullName}
+                        onChange={(e) => setProfileEmergencyName(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="fam-emergency-phone"
+                        className="block text-xs font-semibold text-[#1C1917] mb-1"
+                      >
+                        Emergency Contact Phone
+                      </label>
+                      <input
+                        id="fam-emergency-phone"
+                        type="tel"
+                        required
+                        value={profileEmergencyPhone || currentUser.phone}
+                        onChange={(e) => setProfileEmergencyPhone(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-sm font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="fam-senior-mobility"
+                      className="block text-xs font-semibold text-[#1C1917] mb-1"
+                    >
+                      Non-Medical Mobility / Pace Note
+                    </label>
+                    <input
+                      id="fam-senior-mobility"
+                      type="text"
+                      value={profileMobility}
+                      onChange={(e) => setProfileMobility(e.target.value)}
+                      placeholder="e.g. Uses walking cane, prefers gentle pace and assistance on stairs"
+                      className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-sm"
+                    />
+                  </div>
+
+                  <div className="p-3 bg-white border border-[#BBF7D0] rounded-lg flex items-start gap-2.5">
+                    <input
+                      id="fam-consent-checkbox"
+                      type="checkbox"
+                      checked={familyConsentConfirmed}
+                      onChange={(e) => setFamilyConsentConfirmed(e.target.checked)}
+                      className="mt-1 w-4 h-4 text-[#14532D] border-[#D6D0C4] rounded focus:ring-[#14532D]"
+                    />
+                    <label htmlFor="fam-consent-checkbox" className="text-xs text-[#14532D] leading-relaxed">
+                      <strong>Explicit Family Caregiver Consent:</strong> I confirm that I am an
+                      authorized family member coordinating visits on behalf of this senior citizen,
+                      and family booking permission is enabled for this profile.
+                    </label>
+                  </div>
+
+                  <div className="pt-2 flex flex-wrap items-center gap-3">
+                    <button
+                      type="submit"
+                      disabled={profileCreating || !familyConsentConfirmed}
+                      className="px-5 py-2.5 bg-[#9A3412] text-white text-sm font-semibold rounded-lg hover:bg-[#7C2D12] disabled:opacity-50 transition-colors"
+                    >
+                      {profileCreating
+                        ? 'Saving Senior Profile...'
+                        : 'Save Senior & Continue to Schedule Visit'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      className="px-4 py-2.5 bg-white border border-[#D6D0C4] text-[#1C1917] text-sm font-semibold rounded-lg hover:bg-[#FAF8F5]"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                /* Connect to Existing Senior with allowFamilyBookings Form */
+                <div className="p-6 bg-[#FAF8F5] border border-[#E7E2DA] rounded-xl space-y-4">
+                  <div className="border-b border-[#E7E2DA] pb-3">
+                    <p className="text-xs font-semibold text-[#9A3412]">
+                      Option 2 · Connect to Registered Senior Citizen
+                    </p>
+                    <h3 className="text-lg font-bold text-[#1C1917] mt-0.5">
+                      Select Senior with Active Family Booking Permission
+                    </h3>
+                    <p className="text-xs text-[#57534E] mt-1">
+                      These senior profiles have enabled &ldquo;Allowed for Active Consented Links&rdquo;.
+                      Confirming your caregiver relationship will activate your booking access immediately.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3">
+                    {availableSeniors
+                      .filter((s) => s.allowFamilyBookings)
+                      .map((senior) => (
+                        <div
+                          key={senior.seniorId}
+                          className="p-4 bg-white border border-[#E7E2DA] rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-[#9A3412] transition-colors"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-sm text-[#1C1917]">
+                                {senior.fullName}
+                              </span>
+                              <span className="text-xs text-[#57534E]">({senior.age} yrs)</span>
+                              <span className="px-2 py-0.5 bg-[#F0FDF4] border border-[#BBF7D0] text-[#14532D] text-[11px] font-semibold rounded">
+                                Family Booking Allowed
+                              </span>
+                            </div>
+                            <p className="text-xs text-[#57534E]">
+                              {senior.locality} · {senior.address}
+                            </p>
+                            <p className="text-[11px] text-[#78716C] font-mono">
+                              Senior Share ID: {senior.seniorId}
+                            </p>
+                          </div>
+
+                          <button
+                            type="button"
+                            disabled={profileCreating}
+                            onClick={() => handleConnectExistingSenior(senior)}
+                            className="px-4 py-2 bg-[#14532D] text-white text-xs font-semibold rounded-lg hover:bg-[#166534] whitespace-nowrap shrink-0 disabled:opacity-50"
+                          >
+                            {profileCreating ? 'Connecting...' : 'Connect & Schedule Visit'}
+                          </button>
+                        </div>
+                      ))}
+                  </div>
+
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      className="px-4 py-2 bg-white border border-[#D6D0C4] text-[#1C1917] text-xs font-semibold rounded-lg"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <form
@@ -533,12 +904,23 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
             {/* Step 1: Senior Citizen & Service Selection */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label
-                  htmlFor="booking-senior-select"
-                  className="block text-sm font-semibold text-[#1C1917] mb-1.5"
-                >
-                  Senior Citizen Receiving Accompaniment
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label
+                    htmlFor="booking-senior-select"
+                    className="block text-sm font-semibold text-[#1C1917]"
+                  >
+                    Senior Citizen Receiving Accompaniment
+                  </label>
+                  {currentUser.role === 'family_member' && (
+                    <button
+                      type="button"
+                      onClick={() => setForceShowRegisterForm(true)}
+                      className="text-xs font-semibold text-[#9A3412] hover:text-[#7C2D12] underline"
+                    >
+                      + Add / Link Another Senior
+                    </button>
+                  )}
+                </div>
                 <select
                   id="booking-senior-select"
                   value={selectedSeniorId}

@@ -1134,7 +1134,7 @@ export function selectAvailableHelperForBooking(params: {
       } else if (!servesLocality) {
         unavailableSummary = `Covers ${helper.serviceAreas.join(', ')} (does not cover ${locality}).`;
       } else if (!offersService) {
-        unavailableSummary = `Does not offer ${SERVICE_CATALOG[serviceType]?.label || serviceType}.`;
+        unavailableSummary = `Does not offer ${SERVICE_CATALOG[serviceType]?.shortLabel || serviceType}.`;
       } else if (!withinShiftWindow) {
         unavailableSummary = shiftReason || 'Outside helper shift window.';
       } else if (hasScheduleConflict) {

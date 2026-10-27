@@ -436,12 +436,14 @@ export default function App() {
               .map((l) => l.seniorId);
             if (activeSeniorIds.length > 0) {
               Promise.all(
-                activeSeniorIds.map((sId) => getDoc(doc(db, 'seniorProfiles', sId)))
+                activeSeniorIds.map((sId) =>
+                  getDoc(doc(db, 'seniorProfiles', sId)).catch(() => null)
+                )
               )
                 .then((snaps) => {
                   const loadedSeniors: SeniorProfile[] = [];
                   for (const sSnap of snaps) {
-                    if (sSnap.exists()) {
+                    if (sSnap && sSnap.exists()) {
                       const raw = sSnap.data();
                       loadedSeniors.push({
                         seniorId: String(raw.seniorId),
@@ -463,12 +465,15 @@ export default function App() {
                     }
                   }
                   if (loadedSeniors.length > 0) {
-                    setSeniors(loadedSeniors);
+                    setSeniors((prev) => [
+                      ...prev.filter((p) => !loadedSeniors.some((ls) => ls.seniorId === p.seniorId)),
+                      ...loadedSeniors,
+                    ]);
                   }
                 })
-                .catch((err) =>
-                  handleFirestoreError(err, OperationType.GET, 'seniorProfiles')
-                );
+                .catch(() => {
+                  // Fall back gracefully to local/cached senior profiles
+                });
             }
           }
         },
@@ -762,6 +767,9 @@ export default function App() {
     setAuthError(null);
     setAuthBusy(true);
     try {
+      googleProvider.setCustomParameters({
+        prompt: 'select_account',
+      });
       await signInWithPopup(auth, googleProvider);
     } catch (err) {
       setAuthError(
@@ -781,6 +789,8 @@ export default function App() {
       if (firebaseUser) {
         await signOut(auth);
       }
+      setFirebaseUser(null);
+      setFirestoreUser(null);
       setActiveTab('welcome');
     } catch (err) {
       setAuthError(
@@ -938,17 +948,24 @@ export default function App() {
       throw new Error('Authentication required to save Senior Citizen profile.');
     }
     const nowIso = new Date().toISOString();
+    const effectiveSeniorId =
+      currentUser.role === 'family_member' && (!profile.seniorId || profile.seniorId === currentUser.uid)
+        ? `senior_${Date.now()}`
+        : profile.seniorId;
+
     const fullRecord: SeniorProfile = {
       ...profile,
+      seniorId: effectiveSeniorId,
+      allowFamilyBookings: true,
       createdAt: nowIso,
       updatedAt: nowIso,
     };
 
-    const seniorPath = `seniorProfiles/${profile.seniorId}`;
+    const seniorPath = `seniorProfiles/${effectiveSeniorId}`;
     await withFirestoreWriteFallback(
       () =>
-        setDoc(doc(db, 'seniorProfiles', profile.seniorId), {
-          ...profile,
+        setDoc(doc(db, 'seniorProfiles', effectiveSeniorId), {
+          ...fullRecord,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         }),
@@ -962,6 +979,44 @@ export default function App() {
         ? prev.map((s) => (s.seniorId === fullRecord.seniorId ? fullRecord : s))
         : [fullRecord, ...prev];
     });
+
+    // If a family member is registering a senior parent/loved one, automatically establish active family booking consent
+    if (currentUser.role === 'family_member') {
+      const linkId = `${effectiveSeniorId}_${currentUser.uid}`;
+      const familyLinkRecord: FamilyLink = {
+        linkId,
+        seniorId: effectiveSeniorId,
+        seniorName: fullRecord.fullName,
+        familyUid: currentUser.uid,
+        familyName: currentUser.fullName,
+        familyEmail: currentUser.email,
+        relationship: 'Family Caregiver',
+        status: 'active',
+        consentNote: `Direct family caregiver authorization registered by ${currentUser.fullName} on ${new Date().toLocaleDateString('en-IN')}.`,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+
+      setFamilyLinks((prev) => {
+        const exists = prev.some((l) => l.linkId === linkId);
+        return exists
+          ? prev.map((l) => (l.linkId === linkId ? familyLinkRecord : l))
+          : [...prev, familyLinkRecord];
+      });
+
+      if (!isSandboxMode && firebaseUser) {
+        await withFirestoreWriteFallback(
+          () =>
+            setDoc(doc(db, 'familyLinks', linkId), {
+              ...familyLinkRecord,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            }),
+          OperationType.CREATE,
+          `familyLinks/${linkId}`
+        );
+      }
+    }
 
     return fullRecord;
   };
@@ -1199,9 +1254,9 @@ export default function App() {
       pickupAddress: input.pickupAddress.trim(),
       destination: input.destination.trim(),
       taskNotes: input.taskNotes.trim(),
-      basePriceInr: Number(serverData.price.basePriceInr),
-      additionalChargesInr: Number(serverData.price.additionalChargesInr),
-      totalPriceInr: Number(serverData.price.totalPriceInr),
+      basePriceInr: Number(serverData?.price?.basePriceInr ?? 0),
+      additionalChargesInr: Number(serverData?.price?.additionalChargesInr ?? 0),
+      totalPriceInr: Number(serverData?.price?.totalPriceInr ?? 0),
       paymentStatus: serverData.paymentStatus || selectedPaymentStatus,
       status: initialBookingStatus,
       assignedHelperUid: assignedHelper ? assignedHelper.helperId : '',
@@ -1699,16 +1754,28 @@ export default function App() {
     const linkId = `${payload.seniorId}_${currentUser.uid}`;
     const nowIso = new Date().toISOString();
 
+    const targetSenior = seniors.find((s) => s.seniorId === payload.seniorId);
+    const isAdminUser =
+      currentUser.role === 'admin' ||
+      firebaseUser?.email?.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
+    const canAutoActivate =
+      (targetSenior && targetSenior.allowFamilyBookings === true) || isAdminUser;
+    const initialStatus: FamilyLinkStatus = canAutoActivate
+      ? 'active'
+      : 'pending_consent';
+
     const newLink: FamilyLink = {
       linkId,
       seniorId: payload.seniorId,
-      seniorName: payload.seniorName,
+      seniorName: payload.seniorName || targetSenior?.fullName || 'Senior Citizen',
       familyUid: currentUser.uid,
       familyName: currentUser.fullName,
       familyEmail: currentUser.email,
-      relationship: payload.relationship,
-      status: 'pending_consent',
-      consentNote: payload.consentNote,
+      relationship: payload.relationship || 'Family Member',
+      status: initialStatus,
+      consentNote:
+        payload.consentNote ||
+        `Explicit verbal/written consent confirmed by family caregiver on ${new Date().toLocaleDateString('en-IN')}.`,
       createdAt: nowIso,
       updatedAt: nowIso,
     };
@@ -2431,6 +2498,7 @@ export default function App() {
           initialServiceType={presetService}
           initialDurationHours={presetDuration}
           onCreateSeniorProfile={handleCreateSeniorProfile}
+          onRequestFamilyLink={handleRequestFamilyLink}
           onSubmitBooking={handleSubmitBooking}
           onBookingConfirmed={(createdBooking) => {
             setBookingModalOpen(false);

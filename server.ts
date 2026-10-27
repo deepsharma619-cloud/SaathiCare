@@ -15,7 +15,7 @@ import {
   validateFamilyLinkTransition,
   validateHelperVerificationUpdate,
   verifyAdminEndpointAuthorization,
-} from './src/utils/bookingRules';
+} from './src/utils/bookingRules.ts';
 import type { DurationHours, ServiceType } from './src/types/domain';
 
 dotenv.config();
@@ -258,7 +258,7 @@ app.post('/api/family-links/validate', (req, res) => {
 });
 
 async function startServer() {
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

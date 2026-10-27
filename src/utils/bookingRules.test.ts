@@ -582,7 +582,7 @@ test('10. Milestone 3 invalid status transitions & incident access boundaries', 
     toStatus: 'cancelled',
     actorUid: 'senior_rameshwar',
     actorRole: 'senior',
-    reason: 'Changed mind after visit',
+    reasonOrNote: 'Changed mind after visit',
   });
   assert.equal(cancelCompleted.valid, false);
   assert.match(cancelCompleted.error || '', /terminal state "completed" and cannot be modified/);

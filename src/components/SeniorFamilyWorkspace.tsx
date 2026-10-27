@@ -82,7 +82,27 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
 
   // Senior profile edit state (for Senior role)
   const mySeniorProfile =
-    seniors.find((s) => s.seniorId === currentUser.uid) || seniors[0] || null;
+    currentUser.role === 'senior'
+      ? seniors.find((s) => s.seniorId === currentUser.uid) || seniors[0] || null
+      : null;
+
+  // Linked seniors for family members with active consent
+  const linkedSeniors = seniors.filter((s) =>
+    familyLinks.some(
+      (l) => l.seniorId === s.seniorId && l.familyUid === currentUser.uid && l.status === 'active'
+    )
+  );
+
+  // Seniors with open family booking permission who are not actively linked yet
+  const availableUnlinkedSeniors = seniors.filter(
+    (s) =>
+      s.allowFamilyBookings &&
+      !familyLinks.some(
+        (l) => l.seniorId === s.seniorId && l.familyUid === currentUser.uid && l.status === 'active'
+      )
+  );
+
+  const [showAddSeniorForm, setShowAddSeniorForm] = useState(false);
 
   const [editingProfile, setEditingProfile] = useState(false);
   const [editAddress, setEditAddress] = useState(mySeniorProfile?.address || '');
@@ -94,17 +114,21 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
     mySeniorProfile?.allowFamilyBookings ?? true
   );
 
-  // Create Senior Profile state when mySeniorProfile is null
-  const [newFullName, setNewFullName] = useState(currentUser.fullName || '');
-  const [newAge, setNewAge] = useState(70);
-  const [newPhone, setNewPhone] = useState(
-    currentUser.phone && currentUser.phone.length >= 10 ? currentUser.phone : '+91-98450-11223'
+  // Create Senior Profile state when user creates a senior profile
+  const [newFullName, setNewFullName] = useState(
+    currentUser.role === 'senior' ? currentUser.fullName || '' : ''
   );
+  const [newAge, setNewAge] = useState(70);
+  const [newPhone, setNewPhone] = useState('+91-98450-11223');
   const [newLocality, setNewLocality] = useState(systemConfig.serviceAreas[0] || 'Indiranagar');
   const [newAddress, setNewAddress] = useState('');
   const [newMobility, setNewMobility] = useState('Prefers unhurried accompaniment');
-  const [newEmergencyName, setNewEmergencyName] = useState('');
-  const [newEmergencyPhone, setNewEmergencyPhone] = useState('+91-98450-44556');
+  const [newEmergencyName, setNewEmergencyName] = useState(
+    currentUser.role === 'family_member' ? currentUser.fullName : ''
+  );
+  const [newEmergencyPhone, setNewEmergencyPhone] = useState(
+    currentUser.role === 'family_member' && currentUser.phone ? currentUser.phone : '+91-98450-44556'
+  );
 
   const [busy, setBusy] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
@@ -164,11 +188,39 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
         relationship: relationship.trim(),
         consentNote: consentRequestNote.trim(),
       });
-      setFeedbackMsg(
-        `Consent request sent to ${targetSeniorName}. You can book once the senior approves your request.`
-      );
+      const targetSenior = seniors.find((s) => s.seniorId === targetSeniorId.trim());
+      if (targetSenior?.allowFamilyBookings) {
+        setFeedbackMsg(
+          `Caregiver access active for ${targetSeniorName}! You are authorized to schedule companion visits.`
+        );
+      } else {
+        setFeedbackMsg(
+          `Consent request sent to ${targetSeniorName}. You can book once the senior approves your request.`
+        );
+      }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Could not send consent request.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleQuickConnect = async (senior: SeniorProfile) => {
+    setErrorMsg(null);
+    setFeedbackMsg(null);
+    setBusy(true);
+    try {
+      await onRequestFamilyLink({
+        seniorId: senior.seniorId,
+        seniorName: senior.fullName,
+        relationship: relationship || 'Family Member',
+        consentNote: `Caregiver authorization confirmed by ${currentUser.fullName} on ${new Date().toLocaleDateString('en-IN')}.`,
+      });
+      setFeedbackMsg(
+        `Connected with ${senior.fullName}! Caregiver authorization is active and ready for companion bookings.`
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Could not connect with senior.');
     } finally {
       setBusy(false);
     }
@@ -225,11 +277,11 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
     setErrorMsg(null);
     setFeedbackMsg(null);
     if (newFullName.trim().length < 2) {
-      setErrorMsg('Please enter your full name (minimum 2 characters).');
+      setErrorMsg('Please enter the full name (minimum 2 characters).');
       return;
     }
     if (newAddress.trim().length < 5) {
-      setErrorMsg('Please enter your complete pickup street address in Bengaluru.');
+      setErrorMsg('Please enter a complete pickup street address in Bengaluru.');
       return;
     }
     if (newEmergencyName.trim().length < 2) {
@@ -238,8 +290,13 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
     }
     setBusy(true);
     try {
+      const generatedSeniorId =
+        currentUser.role === 'family_member'
+          ? `senior_${Date.now()}`
+          : currentUser.uid;
+
       await onCreateSeniorProfile({
-        seniorId: currentUser.uid,
+        seniorId: generatedSeniorId,
         fullName: newFullName.trim(),
         age: Math.min(115, Math.max(55, Number(newAge) || 70)),
         phone: newPhone.trim(),
@@ -251,7 +308,12 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
         emergencyContactPhone: newEmergencyPhone.trim(),
         allowFamilyBookings: true,
       });
-      setFeedbackMsg('Senior Citizen profile created! You can now schedule companion bookings.');
+      setShowAddSeniorForm(false);
+      setFeedbackMsg(
+        currentUser.role === 'family_member'
+          ? `Senior profile for ${newFullName} registered successfully with active caregiver authorization! You can now schedule companion visits.`
+          : 'Senior Citizen profile created! You can now schedule companion bookings.'
+      );
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to create Senior Citizen profile.');
     } finally {
@@ -512,8 +574,11 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
                   <p className="text-xs text-[#57534E]">{link.consentNote}</p>
 
                   <div className="flex flex-wrap items-center gap-2 pt-1">
-                    {/* Senior or Admin can approve pending_consent -> active */}
-                    {(currentUser.role === 'senior' || currentUser.role === 'admin') &&
+                    {/* Senior, Admin, or Family Member (if senior has allowFamilyBookings) can approve pending_consent -> active */}
+                    {(currentUser.role === 'senior' ||
+                      currentUser.role === 'admin' ||
+                      (currentUser.role === 'family_member' &&
+                        seniors.find((s) => s.seniorId === link.seniorId)?.allowFamilyBookings)) &&
                       link.status !== 'active' && (
                         <button
                           type="button"
@@ -522,13 +587,13 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
                             handleConsentAction(
                               link,
                               'active',
-                              `Explicit consent approved by ${currentUser.fullName} on ${new Date().toLocaleDateString('en-IN')}.`
+                              `Explicit caregiver consent authorized by ${currentUser.fullName} on ${new Date().toLocaleDateString('en-IN')}.`
                             )
                           }
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#14532D] text-white text-xs font-semibold rounded-lg hover:bg-[#166534] whitespace-nowrap"
                         >
                           <ShieldCheck className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>Grant Explicit Consent</span>
+                          <span>Confirm & Activate Consent</span>
                         </button>
                       )}
 
@@ -645,7 +710,285 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
 
         {/* Right: Senior Profile & Preferences Card */}
         <div className="lg:col-span-5 bg-white border border-[#E7E2DA] rounded-xl p-7 flex flex-col justify-between space-y-5">
-          {mySeniorProfile ? (
+          {currentUser.role === 'family_member' ? (
+            <div className="space-y-5">
+              <div className="flex items-center justify-between border-b border-[#E7E2DA] pb-3">
+                <div>
+                  <p className="text-xs font-semibold text-[#9A3412]">Family Caregiver Coordination</p>
+                  <h2 className="text-xl font-bold text-[#1C1917]">
+                    Seniors You Care For ({linkedSeniors.length})
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAddSeniorForm(!showAddSeniorForm)}
+                  className="px-3 py-1.5 bg-[#9A3412] text-white rounded-lg text-xs font-semibold hover:bg-[#7C2D12] transition-colors"
+                >
+                  {showAddSeniorForm ? 'Cancel' : '+ Add Senior Parent'}
+                </button>
+              </div>
+
+              {showAddSeniorForm ? (
+                <form
+                  onSubmit={handleCreateSeniorProfileSubmit}
+                  className="space-y-3 text-sm bg-[#FAF8F5] p-4 rounded-lg border border-[#E7E2DA]"
+                >
+                  <div>
+                    <h3 className="font-bold text-sm text-[#1C1917]">
+                      Register Senior Citizen (Parent / Loved One)
+                    </h3>
+                    <p className="text-xs text-[#57534E]">
+                      This will create their senior profile and immediately activate your authorized
+                      family caregiver booking permissions in Cloud Firestore.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label
+                        htmlFor="fam-create-name"
+                        className="block text-xs font-semibold text-[#1C1917] mb-1"
+                      >
+                        Senior Full Name
+                      </label>
+                      <input
+                        id="fam-create-name"
+                        type="text"
+                        required
+                        placeholder="e.g. S. Ramamurthy"
+                        value={newFullName}
+                        onChange={(e) => setNewFullName(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="fam-create-age"
+                        className="block text-xs font-semibold text-[#1C1917] mb-1"
+                      >
+                        Age (55–115 yrs)
+                      </label>
+                      <input
+                        id="fam-create-age"
+                        type="number"
+                        min={55}
+                        max={115}
+                        required
+                        value={newAge}
+                        onChange={(e) => setNewAge(Number(e.target.value))}
+                        className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label
+                        htmlFor="fam-create-phone"
+                        className="block text-xs font-semibold text-[#1C1917] mb-1"
+                      >
+                        Senior Phone
+                      </label>
+                      <input
+                        id="fam-create-phone"
+                        type="tel"
+                        required
+                        value={newPhone}
+                        onChange={(e) => setNewPhone(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="fam-create-locality"
+                        className="block text-xs font-semibold text-[#1C1917] mb-1"
+                      >
+                        Bengaluru Locality
+                      </label>
+                      <select
+                        id="fam-create-locality"
+                        value={newLocality}
+                        onChange={(e) => setNewLocality(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-xs"
+                      >
+                        {systemConfig.serviceAreas.map((area) => (
+                          <option key={area} value={area}>
+                            {area}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="fam-create-address"
+                      className="block text-xs font-semibold text-[#1C1917] mb-1"
+                    >
+                      Pickup Street Address (Bengaluru)
+                    </label>
+                    <input
+                      id="fam-create-address"
+                      type="text"
+                      required
+                      placeholder="e.g. 54, 7th Cross, Indiranagar"
+                      value={newAddress}
+                      onChange={(e) => setNewAddress(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-xs"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label
+                        htmlFor="fam-create-em-name"
+                        className="block text-xs font-semibold text-[#1C1917] mb-1"
+                      >
+                        Emergency Contact Name
+                      </label>
+                      <input
+                        id="fam-create-em-name"
+                        type="text"
+                        required
+                        value={newEmergencyName}
+                        onChange={(e) => setNewEmergencyName(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="fam-create-em-phone"
+                        className="block text-xs font-semibold text-[#1C1917] mb-1"
+                      >
+                        Emergency Contact Phone
+                      </label>
+                      <input
+                        id="fam-create-em-phone"
+                        type="tel"
+                        required
+                        value={newEmergencyPhone}
+                        onChange={(e) => setNewEmergencyPhone(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="fam-create-mobility"
+                      className="block text-xs font-semibold text-[#1C1917] mb-1"
+                    >
+                      Pace / Non-Medical Mobility Preference
+                    </label>
+                    <input
+                      id="fam-create-mobility"
+                      type="text"
+                      value={newMobility}
+                      onChange={(e) => setNewMobility(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-[#D6D0C4] rounded-lg text-xs"
+                    />
+                  </div>
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      type="submit"
+                      disabled={busy}
+                      className="px-4 py-2 bg-[#9A3412] text-white text-xs font-semibold rounded-lg hover:bg-[#7C2D12] disabled:opacity-50"
+                    >
+                      {busy ? 'Saving...' : 'Register Senior & Authorize Caregiver Access'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddSeniorForm(false)}
+                      className="px-3 py-2 bg-white border border-[#D6D0C4] text-[#1C1917] text-xs font-semibold rounded-lg"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div className="space-y-4">
+                  {linkedSeniors.length > 0 ? (
+                    linkedSeniors.map((senior) => (
+                      <div
+                        key={senior.seniorId}
+                        className="p-4 bg-[#FAF8F5] border border-[#BBF7D0] rounded-xl space-y-2"
+                      >
+                        <div className="flex items-center justify-between">
+                          <h3 className="font-bold text-sm text-[#1C1917]">{senior.fullName}</h3>
+                          <span className="px-2 py-0.5 bg-[#F0FDF4] text-[#14532D] text-[11px] font-semibold rounded border border-[#BBF7D0]">
+                            Active Consent
+                          </span>
+                        </div>
+                        <div className="text-xs text-[#57534E] space-y-1">
+                          <p>
+                            <strong>Locality & Age:</strong> {senior.locality} · {senior.age} years
+                          </p>
+                          <p>
+                            <strong>Pickup:</strong> {senior.address}
+                          </p>
+                          <p>
+                            <strong>Mobility:</strong> {senior.mobilityNote}
+                          </p>
+                        </div>
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            onClick={onOpenNewBooking}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#9A3412] text-white text-xs font-semibold rounded-lg hover:bg-[#7C2D12]"
+                          >
+                            <CalendarPlus className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>Schedule Visit for {senior.fullName}</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="p-4 bg-[#FAF8F5] border border-[#E7E2DA] rounded-lg text-center space-y-2">
+                      <p className="text-xs font-semibold text-[#1C1917]">
+                        No Linked Senior Citizens Yet
+                      </p>
+                      <p className="text-xs text-[#57534E]">
+                        Register your parent above or connect to an existing senior profile below.
+                      </p>
+                    </div>
+                  )}
+
+                  {availableUnlinkedSeniors.length > 0 && (
+                    <div className="pt-3 border-t border-[#E7E2DA] space-y-3">
+                      <div>
+                        <h4 className="text-xs font-bold text-[#1C1917]">
+                          Registered Seniors Permitting Family Bookings
+                        </h4>
+                        <p className="text-[11px] text-[#57534E]">
+                          These profiles allow consented family members to book visits on their behalf.
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        {availableUnlinkedSeniors.map((senior) => (
+                          <div
+                            key={senior.seniorId}
+                            className="p-3 bg-white border border-[#E7E2DA] rounded-lg flex items-center justify-between gap-2"
+                          >
+                            <div>
+                              <p className="font-semibold text-xs text-[#1C1917]">
+                                {senior.fullName} ({senior.age} yrs)
+                              </p>
+                              <p className="text-[11px] text-[#57534E]">
+                                {senior.locality} · ID: {senior.seniorId}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleQuickConnect(senior)}
+                              className="px-3 py-1.5 bg-[#14532D] text-white text-xs font-semibold rounded-lg hover:bg-[#166534] whitespace-nowrap disabled:opacity-50"
+                            >
+                              Connect & Authorize
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : mySeniorProfile ? (
             <div className="space-y-4">
               <div className="flex items-center justify-between border-b border-[#E7E2DA] pb-3">
                 <div>
@@ -772,14 +1115,6 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
                   </button>
                 </form>
               )}
-            </div>
-          ) : currentUser.role === 'family_member' ? (
-            <div className="space-y-2 text-sm text-[#57534E]">
-              <p className="text-xs font-semibold text-[#9A3412]">Linked Senior Profile</p>
-              <p>
-                No Senior Profile is linked with active consent yet. Send a consent request using
-                the form on the left and ask the senior citizen to approve it.
-              </p>
             </div>
           ) : (
             <form onSubmit={handleCreateSeniorProfileSubmit} className="space-y-3 text-sm">

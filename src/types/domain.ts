@@ -124,10 +124,12 @@ export interface HelperProfile {
   updatedAt: string;
 }
 
+export type DayOfWeek = 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' | 'Sun';
+
 export interface HelperAvailability {
   availabilityId: string;
   helperId: string;
-  availableDays: ('Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' | 'Sun')[];
+  availableDays: DayOfWeek[];
   startHour: string;
   endHour: string;
   updatedAt: string;

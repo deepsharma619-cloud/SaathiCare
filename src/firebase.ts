@@ -19,6 +19,9 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({
+  prompt: 'select_account',
+});
 
 export const BOOTSTRAPPED_ADMIN_EMAIL = 'deepsharma619@gmail.com';
 
