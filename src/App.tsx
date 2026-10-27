@@ -1786,6 +1786,47 @@ export default function App() {
     ]);
 
     if (!isSandboxMode && firebaseUser) {
+      // Ensure the senior profile exists in Cloud Firestore so the foreign-key relation constraint in firestore.rules passes
+      const cleanSeniorId = payload.seniorId.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+      const seniorDocRef = doc(db, 'seniorProfiles', cleanSeniorId);
+      const seniorSnap = await getDoc(seniorDocRef).catch(() => null);
+      if (!seniorSnap || !seniorSnap.exists()) {
+        const seniorDataToCreate: SeniorProfile = targetSenior || {
+          seniorId: cleanSeniorId,
+          fullName: payload.seniorName.trim() || 'Senior Citizen',
+          age: 70,
+          phone: '+91-98450-11223',
+          locality: systemConfig.serviceAreas[0] || 'Indiranagar',
+          address: 'Bengaluru Residence',
+          preferredLanguages: ['Kannada', 'English'],
+          mobilityNote: 'Prefers unhurried accompaniment',
+          emergencyContactName: currentUser.fullName,
+          emergencyContactPhone:
+            currentUser.phone && currentUser.phone.length >= 10
+              ? currentUser.phone
+              : '+91-98450-44556',
+          allowFamilyBookings: true,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        };
+
+        await withFirestoreWriteFallback(
+          () =>
+            setDoc(seniorDocRef, {
+              ...seniorDataToCreate,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            }),
+          OperationType.CREATE,
+          `seniorProfiles/${cleanSeniorId}`
+        );
+
+        setSeniors((prev) => [
+          ...prev.filter((s) => s.seniorId !== cleanSeniorId),
+          seniorDataToCreate,
+        ]);
+      }
+
       const path = `familyLinks/${linkId}`;
       await withFirestoreWriteFallback(
         () =>

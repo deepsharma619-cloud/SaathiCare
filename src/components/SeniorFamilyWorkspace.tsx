@@ -73,8 +73,8 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
 
   // Family link request state (for Family Member role)
-  const [targetSeniorId, setTargetSeniorId] = useState('senior_lakshmi');
-  const [targetSeniorName, setTargetSeniorName] = useState('Lakshmi Narasimhan');
+  const [targetSeniorId, setTargetSeniorId] = useState('');
+  const [targetSeniorName, setTargetSeniorName] = useState('');
   const [relationship, setRelationship] = useState('Daughter / Son');
   const [consentRequestNote, setConsentRequestNote] = useState(
     'Requesting authorization to schedule outpatient clinic and grocery visits.'
@@ -180,6 +180,14 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
     e.preventDefault();
     setErrorMsg(null);
     setFeedbackMsg(null);
+    if (!targetSeniorId.trim()) {
+      setErrorMsg('Please select a registered senior citizen or enter their Senior Share ID.');
+      return;
+    }
+    if (!targetSeniorName.trim()) {
+      setErrorMsg('Please enter the Senior Citizen Full Name.');
+      return;
+    }
     setBusy(true);
     try {
       await onRequestFamilyLink({
@@ -195,9 +203,11 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
         );
       } else {
         setFeedbackMsg(
-          `Consent request sent to ${targetSeniorName}. You can book once the senior approves your request.`
+          `Consent request sent for ${targetSeniorName}. You can book once the senior approves your request.`
         );
       }
+      setTargetSeniorId('');
+      setTargetSeniorName('');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Could not send consent request.');
     } finally {
@@ -631,6 +641,36 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
                 <UserPlus className="w-4 h-4 text-[#9A3412]" aria-hidden="true" />
                 <span>Request Authorization Link from a Senior Citizen</span>
               </h3>
+              {seniors.length > 0 && (
+                <div>
+                  <label
+                    htmlFor="select-registered-senior"
+                    className="block text-xs font-semibold text-[#1C1917] mb-1"
+                  >
+                    Quick Select Registered Senior Citizen (Optional)
+                  </label>
+                  <select
+                    id="select-registered-senior"
+                    value={targetSeniorId}
+                    onChange={(e) => {
+                      const selectedId = e.target.value;
+                      setTargetSeniorId(selectedId);
+                      const matched = seniors.find((s) => s.seniorId === selectedId);
+                      if (matched) {
+                        setTargetSeniorName(matched.fullName);
+                      }
+                    }}
+                    className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#D6D0C4] rounded-lg text-xs text-[#1C1917]"
+                  >
+                    <option value="">-- Choose registered senior or enter ID manually below --</option>
+                    {seniors.map((s) => (
+                      <option key={s.seniorId} value={s.seniorId}>
+                        {s.fullName} ({s.locality}) — ID: {s.seniorId}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label
@@ -643,9 +683,10 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
                     id="req-senior-id"
                     type="text"
                     required
+                    placeholder="e.g. senior_lakshmi or riky"
                     value={targetSeniorId}
                     onChange={(e) => setTargetSeniorId(e.target.value)}
-                    className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#D6D0C4] rounded-lg text-xs font-mono"
+                    className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#D6D0C4] rounded-lg text-xs font-mono placeholder:text-stone-400"
                   />
                 </div>
                 <div>
@@ -659,9 +700,10 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
                     id="req-senior-name"
                     type="text"
                     required
+                    placeholder="e.g. Lakshmi Narasimhan"
                     value={targetSeniorName}
                     onChange={(e) => setTargetSeniorName(e.target.value)}
-                    className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#D6D0C4] rounded-lg text-xs"
+                    className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#D6D0C4] rounded-lg text-xs placeholder:text-stone-400"
                   />
                 </div>
                 <div>
@@ -675,9 +717,10 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
                     id="req-relationship"
                     type="text"
                     required
+                    placeholder="e.g. Daughter / Son"
                     value={relationship}
                     onChange={(e) => setRelationship(e.target.value)}
-                    className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#D6D0C4] rounded-lg text-xs"
+                    className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#D6D0C4] rounded-lg text-xs placeholder:text-stone-400"
                   />
                 </div>
               </div>
@@ -692,17 +735,18 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
                   id="req-consent-note"
                   type="text"
                   required
+                  placeholder="e.g. Requesting authorization to schedule outpatient clinic and grocery visits."
                   value={consentRequestNote}
                   onChange={(e) => setConsentRequestNote(e.target.value)}
-                  className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#D6D0C4] rounded-lg text-xs"
+                  className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#D6D0C4] rounded-lg text-xs placeholder:text-stone-400"
                 />
               </div>
               <button
                 type="submit"
                 disabled={busy}
-                className="px-4 py-2 bg-[#1C1917] text-white text-xs font-semibold rounded-lg hover:bg-[#292524]"
+                className="px-4 py-2 bg-[#1C1917] text-white text-xs font-semibold rounded-lg hover:bg-[#292524] disabled:opacity-50"
               >
-                Send Consent Request (Starts as Pending Consent)
+                {busy ? 'Sending Request...' : 'Send Consent Request (Starts as Pending Consent)'}
               </button>
             </form>
           )}
