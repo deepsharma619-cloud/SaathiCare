@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import type {
   BookingRecord,
+  BookingStatus,
   FamilyLink,
   FamilyLinkStatus,
   ReviewRecord,
@@ -35,6 +36,11 @@ interface SeniorFamilyWorkspaceProps {
   systemConfig: SystemConfig;
   onOpenNewBooking: () => void;
   onSelectBooking: (booking: BookingRecord) => void;
+  onTransitionStatus?: (
+    booking: BookingRecord,
+    toStatus: BookingStatus,
+    reasonOrNote: string
+  ) => Promise<void>;
   onRequestFamilyLink: (payload: {
     seniorId: string;
     seniorName: string;
@@ -62,6 +68,7 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
   systemConfig,
   onOpenNewBooking,
   onSelectBooking,
+  onTransitionStatus,
   onRequestFamilyLink,
   onUpdateFamilyLinkStatus,
   onCreateSeniorProfile,
@@ -236,6 +243,29 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
     }
   };
 
+  const handleQuickVisitControl = async (
+    booking: BookingRecord,
+    toStatus: 'in_progress' | 'completed',
+    note: string
+  ) => {
+    if (!onTransitionStatus) return;
+    setErrorMsg(null);
+    setFeedbackMsg(null);
+    setBusy(true);
+    try {
+      await onTransitionStatus(booking, toStatus, note);
+      setFeedbackMsg(
+        toStatus === 'in_progress'
+          ? `Booking ${booking.bookingRef} marked "Visit in Progress".`
+          : `Booking ${booking.bookingRef} marked "Visit Completed".`
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to update visit status.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleConsentAction = async (
     link: FamilyLink,
     nextStatus: FamilyLinkStatus,
@@ -340,14 +370,14 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
             {currentUser.role === 'family_member'
               ? 'Authorized Family Member Workspace · Bengaluru'
               : 'Senior Citizen Companion Workspace · Bengaluru'}
-            {isSandboxMode ? ' · [DEVELOPMENT DEMO MODE]' : ''}
+            {isSandboxMode ? ' · [TEST MODE]' : ''}
           </p>
           <h1 className="text-2xl sm:text-3xl font-bold text-[#1C1917]">
             Namaskara, {currentUser.fullName}
           </h1>
           <p className="text-sm text-[#57534E]">
             {currentUser.role === 'family_member'
-              ? 'Manage explicit senior consent authorizations and schedule non-medical companion visits on behalf of your loved ones.'
+              ? 'Request hospital accompaniment or companion visits for your linked senior, view live booking statuses, and manage family consent authorizations.'
               : 'Schedule non-medical companion visits, track helper arrival, and control which family members are authorized to book for you.'}
           </p>
         </div>
@@ -357,7 +387,7 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
           className="inline-flex items-center gap-2 px-5 py-3 bg-[#9A3412] text-white text-sm font-semibold rounded-lg hover:bg-[#7C2D12] transition-colors whitespace-nowrap shrink-0"
         >
           <CalendarPlus className="w-4 h-4" aria-hidden="true" />
-          <span>Schedule New Companion Visit</span>
+          <span>Request Hospital / Companion Visit</span>
         </button>
       </div>
 
@@ -459,13 +489,13 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="border-b border-[#E7E2DA] bg-[#FAF8F5] text-xs font-semibold text-[#57534E]">
-                    <th className="py-3.5 px-4">Reference & Service</th>
-                    <th className="py-3.5 px-4">Senior & Locality</th>
-                    <th className="py-3.5 px-4">Schedule</th>
-                    <th className="py-3.5 px-4">Workflow Status</th>
-                    <th className="py-3.5 px-4">Assigned Companion</th>
-                    <th className="py-3.5 px-4 text-right">Fee</th>
-                    <th className="py-3.5 px-4 text-right">Action</th>
+                    <th className="py-3.5 px-3">Reference & Service</th>
+                    <th className="py-3.5 px-3">Senior & Locality</th>
+                    <th className="py-3.5 px-3">Schedule</th>
+                    <th className="py-3.5 px-3">Workflow Status</th>
+                    <th className="py-3.5 px-3">Assigned Companion</th>
+                    <th className="py-3.5 px-3 text-right">Fee</th>
+                    <th className="py-3.5 px-3 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E7E2DA] text-sm">
@@ -474,7 +504,7 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
                       key={booking.bookingId}
                       className="hover:bg-[#FAF8F5] transition-colors"
                     >
-                      <td className="py-3.5 px-4">
+                      <td className="py-3.5 px-3">
                         <div className="font-mono font-bold text-xs text-[#9A3412] tabular-nums">
                           {booking.bookingRef}
                         </div>
@@ -482,27 +512,27 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
                           {SERVICE_CATALOG[booking.serviceType].shortLabel}
                         </div>
                         {booking.destination && (
-                          <div className="text-xs text-[#57534E] truncate max-w-xs">
+                          <div className="text-xs text-[#57534E] truncate max-w-[230px]">
                             To: {booking.destination}
                           </div>
                         )}
                       </td>
-                      <td className="py-3.5 px-4">
+                      <td className="py-3.5 px-3">
                         <div className="font-semibold text-[#1C1917]">{booking.seniorName}</div>
                         <div className="text-xs text-[#57534E]">
                           {booking.locality} · Booked by {booking.bookedByName}
                         </div>
                       </td>
-                      <td className="py-3.5 px-4 font-mono text-xs text-[#1C1917] tabular-nums whitespace-nowrap">
+                      <td className="py-3.5 px-3 font-mono text-xs text-[#1C1917] tabular-nums whitespace-nowrap">
                         <div>{booking.date}</div>
                         <div className="text-[#57534E]">
                           {booking.startTime} · {booking.durationHours}h
                         </div>
                       </td>
-                      <td className="py-3.5 px-4 whitespace-nowrap">
+                      <td className="py-3.5 px-3 whitespace-nowrap">
                         <BookingStatusText status={booking.status} />
                       </td>
-                      <td className="py-3.5 px-4 text-xs">
+                      <td className="py-3.5 px-3 text-xs">
                         {booking.assignedHelperUid ? (
                           <div>
                             <div className="font-semibold text-[#1C1917]">
@@ -511,6 +541,12 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
                             <div className="text-[#57534E]">
                               {booking.status === 'assigned'
                                 ? 'Awaiting helper acceptance'
+                                : booking.status === 'arrived'
+                                ? 'Arrived at pickup'
+                                : booking.status === 'in_progress'
+                                ? 'Visit in progress'
+                                : booking.status === 'completed'
+                                ? 'Visit completed'
                                 : 'Confirmed by helper'}
                             </div>
                           </div>
@@ -518,18 +554,58 @@ export const SeniorFamilyWorkspace: React.FC<SeniorFamilyWorkspaceProps> = ({
                           <span className="text-[#78716C]">Pending coordinator assignment</span>
                         )}
                       </td>
-                      <td className="py-3.5 px-4 text-right font-mono font-semibold text-[#1C1917] tabular-nums whitespace-nowrap">
+                      <td className="py-3.5 px-3 text-right font-mono font-semibold text-[#1C1917] tabular-nums whitespace-nowrap">
                         {formatInr(booking.totalPriceInr)}
                       </td>
-                      <td className="py-3.5 px-4 text-right">
-                        <button
-                          type="button"
-                          onClick={() => onSelectBooking(booking)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#FAF8F5] border border-[#D6D0C4] rounded-lg text-xs font-semibold text-[#1C1917] hover:bg-[#F3EFEA] whitespace-nowrap"
-                        >
-                          <Eye className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>Details & Timeline</span>
-                        </button>
+                      <td className="py-3.5 px-3 text-right">
+                        <div className="inline-flex items-center justify-end gap-2">
+                          {onTransitionStatus &&
+                            (booking.bookedByUid === currentUser.uid ||
+                              booking.seniorId === currentUser.uid) &&
+                            booking.status === 'arrived' && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() =>
+                                  handleQuickVisitControl(
+                                    booking,
+                                    'in_progress',
+                                    `Visit started by ${currentUser.fullName} after helper arrival at pickup.`
+                                  )
+                                }
+                                className="inline-flex items-center gap-1 px-3 py-1.5 bg-[#9A3412] text-white rounded-lg text-xs font-semibold hover:bg-[#7C2D12] disabled:opacity-50 whitespace-nowrap"
+                              >
+                                <span>Start Visit</span>
+                              </button>
+                            )}
+                          {onTransitionStatus &&
+                            (booking.bookedByUid === currentUser.uid ||
+                              booking.seniorId === currentUser.uid) &&
+                            booking.status === 'in_progress' && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() =>
+                                  handleQuickVisitControl(
+                                    booking,
+                                    'completed',
+                                    `Visit completed and confirmed by ${currentUser.fullName}.`
+                                  )
+                                }
+                                className="inline-flex items-center gap-1 px-3 py-1.5 bg-[#14532D] text-white rounded-lg text-xs font-semibold hover:bg-[#166534] disabled:opacity-50 whitespace-nowrap"
+                              >
+                                <span>Complete Visit</span>
+                              </button>
+                            )}
+                          <button
+                            type="button"
+                            onClick={() => onSelectBooking(booking)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#FAF8F5] border border-[#D6D0C4] rounded-lg text-xs font-semibold text-[#1C1917] hover:bg-[#F3EFEA] whitespace-nowrap"
+                          >
+                            <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>Details & Timeline</span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

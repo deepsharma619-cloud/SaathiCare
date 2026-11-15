@@ -539,10 +539,17 @@ service cloud.firestore {
 
     // /bookings/{bookingId} — Enforced Workflow State Machine & Pricing
     function isApprovedActiveHelperId(helperId) {
-      return helperId in ['helper_asha_01', 'helper_ramesh_02', 'helper_kavitha_03'] || (
+      return (
         exists(/databases/$(database)/documents/helpers/$(helperId)) &&
         get(/databases/$(database)/documents/helpers/$(helperId)).data.verificationStatus == 'approved' &&
         get(/databases/$(database)/documents/helpers/$(helperId)).data.isActive == true
+      ) || (
+        !exists(/databases/$(database)/documents/helpers/$(helperId)) &&
+        helperId in [
+          'helper_asha_01', 'helper_ramesh_02', 'helper_kavitha_03',
+          'helper_kavitha', 'helper_suresh',
+          'helper_anita', 'helper_karthik', 'helper_deepa', 'helper_manoj', 'helper_revathi'
+        ]
       );
     }
 

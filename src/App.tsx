@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   onAuthStateChanged,
   signInWithPopup,
@@ -54,6 +54,7 @@ import {
 } from './types/domain';
 import {
   DEFAULT_SYSTEM_CONFIG,
+  findBookingsReadyForAutomaticArrival,
   generateBookingReference,
   INITIAL_HELPER_AVAILABILITIES,
   INITIAL_VERIFIED_HELPERS,
@@ -68,9 +69,87 @@ import { HeroWelcome } from './components/HeroWelcome';
 import { BookingFormModal } from './components/BookingFormModal';
 import { BookingDetailsDrawer } from './components/BookingDetailsDrawer';
 import { SeniorFamilyWorkspace } from './components/SeniorFamilyWorkspace';
-import { HelperWorkspace } from './components/HelperWorkspace';
-import { AdminWorkspace } from './components/AdminWorkspace';
 import { IncidentSupportModal } from './components/IncidentSupportModal';
+import {
+  TEST_ACCOUNTS,
+  createInitialTestDataset,
+  findTestAccountByUid,
+  type TestDatasetState,
+} from './utils/testAccounts';
+
+const ACTIVE_TEST_UID_KEY = 'saathicare_active_test_uid';
+const TEST_DATASET_STORAGE_KEY = 'saathicare_test_dataset_v4';
+
+function mergeWithInitialHelpers(existing: HelperProfile[]): HelperProfile[] {
+  const nowIso = new Date().toISOString();
+  const byId = new Map(existing.map((h) => [h.helperId, h]));
+  for (const seed of INITIAL_VERIFIED_HELPERS) {
+    if (!byId.has(seed.helperId)) {
+      byId.set(seed.helperId, {
+        ...seed,
+        languages: [...seed.languages],
+        serviceAreas: [...seed.serviceAreas],
+        servicesOffered: [...seed.servicesOffered],
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      });
+    }
+  }
+  return Array.from(byId.values());
+}
+
+function mergeWithInitialAvailabilities(
+  existing: HelperAvailability[]
+): HelperAvailability[] {
+  const nowIso = new Date().toISOString();
+  const byId = new Map(existing.map((a) => [a.helperId, a]));
+  for (const seed of INITIAL_HELPER_AVAILABILITIES) {
+    if (!byId.has(seed.helperId)) {
+      byId.set(seed.helperId, {
+        ...seed,
+        availableDays: [...seed.availableDays],
+        updatedAt: nowIso,
+      });
+    }
+  }
+  return Array.from(byId.values());
+}
+
+function loadOrCreateTestDataset(): TestDatasetState {
+  try {
+    const raw = localStorage.getItem(TEST_DATASET_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<TestDatasetState>;
+      if (
+        parsed &&
+        parsed.systemConfig &&
+        Array.isArray(parsed.seniors) &&
+        Array.isArray(parsed.helpers) &&
+        Array.isArray(parsed.bookings)
+      ) {
+        const fallback = createInitialTestDataset();
+        return {
+          systemConfig: parsed.systemConfig,
+          seniors: parsed.seniors,
+          familyLinks: Array.isArray(parsed.familyLinks) ? parsed.familyLinks : fallback.familyLinks,
+          helpers: mergeWithInitialHelpers(parsed.helpers),
+          availabilities: mergeWithInitialAvailabilities(
+            Array.isArray(parsed.availabilities) ? parsed.availabilities : fallback.availabilities
+          ),
+          bookings: parsed.bookings,
+          bookingEvents: Array.isArray(parsed.bookingEvents) ? parsed.bookingEvents : fallback.bookingEvents,
+          reviews: Array.isArray(parsed.reviews) ? parsed.reviews : fallback.reviews,
+          incidents: Array.isArray(parsed.incidents) ? parsed.incidents : fallback.incidents,
+        };
+      }
+    }
+  } catch {
+    // Fall back to fresh test dataset
+  }
+  const initial = createInitialTestDataset();
+  saveCachedJson(TEST_DATASET_STORAGE_KEY, initial);
+  return initial;
+}
 
 function loadCachedJson<T>(key: string, fallback: T): T {
   try {
@@ -116,72 +195,108 @@ export default function App() {
   const [firestoreUser, setFirestoreUser] = useState<UserProfile | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  const isSandboxMode = false;
+  const [activeTestUid, setActiveTestUid] = useState<string | null>(() => {
+    try {
+      const saved = localStorage.getItem(ACTIVE_TEST_UID_KEY);
+      return findTestAccountByUid(saved) ? saved : null;
+    } catch {
+      return null;
+    }
+  });
+  const activeTestAccount = findTestAccountByUid(activeTestUid);
+  const isSandboxMode = Boolean(activeTestAccount);
 
-  // Application state backed by Cloud Firestore with local cache resilience
+  // Application state backed by Cloud Firestore (or isolated shared Test Dataset when in Test Mode)
   const [systemConfig, setSystemConfig] = useState<SystemConfig>(() =>
-    loadCachedJson('saathicare_cache_config', DEFAULT_SYSTEM_CONFIG)
+    activeTestAccount
+      ? loadOrCreateTestDataset().systemConfig
+      : loadCachedJson('saathicare_cache_config', DEFAULT_SYSTEM_CONFIG)
   );
   const [seniors, setSeniors] = useState<SeniorProfile[]>(() =>
-    loadCachedJson('saathicare_cache_seniors', [])
+    activeTestAccount
+      ? loadOrCreateTestDataset().seniors
+      : loadCachedJson('saathicare_cache_seniors', [])
   );
   const [familyLinks, setFamilyLinks] = useState<FamilyLink[]>(() =>
-    loadCachedJson('saathicare_cache_familyLinks', [])
+    activeTestAccount
+      ? loadOrCreateTestDataset().familyLinks
+      : loadCachedJson('saathicare_cache_familyLinks', [])
   );
   const [helpers, setHelpers] = useState<HelperProfile[]>(() => {
+    if (activeTestAccount) return loadOrCreateTestDataset().helpers;
     const cached = loadCachedJson<HelperProfile[]>('saathicare_cache_helpers', []);
-    return cached.length > 0 ? cached : getDefaultHelpersList();
+    return cached.length > 0 ? mergeWithInitialHelpers(cached) : getDefaultHelpersList();
   });
   const [availabilities, setAvailabilities] = useState<HelperAvailability[]>(() => {
+    if (activeTestAccount) return loadOrCreateTestDataset().availabilities;
     const cached = loadCachedJson<HelperAvailability[]>(
       'saathicare_cache_availabilities',
       []
     );
-    return cached.length > 0 ? cached : getDefaultAvailabilitiesList();
+    return cached.length > 0
+      ? mergeWithInitialAvailabilities(cached)
+      : getDefaultAvailabilitiesList();
   });
   const [bookings, setBookings] = useState<BookingRecord[]>(() =>
-    loadCachedJson('saathicare_cache_bookings', [])
+    activeTestAccount
+      ? loadOrCreateTestDataset().bookings
+      : loadCachedJson('saathicare_cache_bookings', [])
   );
   const [bookingEvents, setBookingEvents] = useState<BookingEventRecord[]>(() =>
-    loadCachedJson('saathicare_cache_events', [])
+    activeTestAccount
+      ? loadOrCreateTestDataset().bookingEvents
+      : loadCachedJson('saathicare_cache_events', [])
   );
   const [reviews, setReviews] = useState<ReviewRecord[]>(() =>
-    loadCachedJson('saathicare_cache_reviews', [])
+    activeTestAccount
+      ? loadOrCreateTestDataset().reviews
+      : loadCachedJson('saathicare_cache_reviews', [])
   );
   const [incidents, setIncidents] = useState<IncidentRecord[]>(() =>
-    loadCachedJson('saathicare_cache_incidents', [])
+    activeTestAccount
+      ? loadOrCreateTestDataset().incidents
+      : loadCachedJson('saathicare_cache_incidents', [])
   );
 
-  // Sync collections to localStorage for seamless offline continuity
+  // Sync collections to either isolated Test Dataset storage or standard offline cache
   useEffect(() => {
+    if (isSandboxMode) {
+      saveCachedJson(TEST_DATASET_STORAGE_KEY, {
+        systemConfig,
+        seniors,
+        familyLinks,
+        helpers,
+        availabilities,
+        bookings,
+        bookingEvents,
+        reviews,
+        incidents,
+      } satisfies TestDatasetState);
+      return;
+    }
     saveCachedJson('saathicare_cache_config', systemConfig);
-  }, [systemConfig]);
-  useEffect(() => {
     saveCachedJson('saathicare_cache_seniors', seniors);
-  }, [seniors]);
-  useEffect(() => {
     saveCachedJson('saathicare_cache_familyLinks', familyLinks);
-  }, [familyLinks]);
-  useEffect(() => {
     if (helpers.length > 0) saveCachedJson('saathicare_cache_helpers', helpers);
-  }, [helpers]);
-  useEffect(() => {
     if (availabilities.length > 0) {
       saveCachedJson('saathicare_cache_availabilities', availabilities);
     }
-  }, [availabilities]);
-  useEffect(() => {
     saveCachedJson('saathicare_cache_bookings', bookings);
-  }, [bookings]);
-  useEffect(() => {
     saveCachedJson('saathicare_cache_events', bookingEvents);
-  }, [bookingEvents]);
-  useEffect(() => {
     saveCachedJson('saathicare_cache_reviews', reviews);
-  }, [reviews]);
-  useEffect(() => {
     saveCachedJson('saathicare_cache_incidents', incidents);
-  }, [incidents]);
+  }, [
+    isSandboxMode,
+    systemConfig,
+    seniors,
+    familyLinks,
+    helpers,
+    availabilities,
+    bookings,
+    bookingEvents,
+    reviews,
+    incidents,
+  ]);
 
   // Modals & Drawers
   const [bookingModalOpen, setBookingModalOpen] = useState(false);
@@ -190,9 +305,16 @@ export default function App() {
   const [selectedBookingId, setSelectedBookingId] = useState<string | null>(null);
   const [supportModalOpen, setSupportModalOpen] = useState(false);
   const [supportBookingId, setSupportBookingId] = useState<string>('general');
+  const [testResetVersion, setTestResetVersion] = useState(0);
+  const [testResetNotice, setTestResetNotice] = useState<string | null>(null);
+  const autoArrivedIdsRef = useRef<Set<string>>(new Set());
 
-  // Resolve current authenticated user profile from Firebase Auth + Firestore
-  const currentUser: UserProfile | null = firebaseUser ? firestoreUser : null;
+  // Resolve current authenticated user profile (Active Test Account overrides Firebase session when in Test Mode)
+  const currentUser: UserProfile | null = activeTestAccount
+    ? activeTestAccount.profile
+    : firebaseUser
+    ? firestoreUser
+    : null;
 
   // 1. Listen to Firebase Auth state
   useEffect(() => {
@@ -313,9 +435,9 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // 2. Listen to public /systemConfig/bengaluru when online
+  // 2. Listen to public /systemConfig/bengaluru when online and not in Test Mode
   useEffect(() => {
-    if (!authReady || isOfflineModeActive()) return;
+    if (!authReady || isSandboxMode || isOfflineModeActive()) return;
     const unsub = onSnapshot(
       doc(db, 'systemConfig', 'bengaluru'),
       (snap) => {
@@ -344,12 +466,13 @@ export default function App() {
       }
     );
     return () => unsub();
-  }, [authReady]);
+  }, [authReady, isSandboxMode]);
 
   // 3. Attach role-scoped real-time Firestore listeners when authenticated with a verified user
   useEffect(() => {
     if (
       !authReady ||
+      isSandboxMode ||
       !firebaseUser ||
       !firestoreUser ||
       !firebaseUser.emailVerified ||
@@ -521,7 +644,7 @@ export default function App() {
             };
           });
           if (list.length > 0) {
-            setHelpers(list);
+            setHelpers(mergeWithInitialHelpers(list));
           }
 
           // For non-admin bookers (seniors & family members), load each approved helper's availability document via getDoc
@@ -544,15 +667,15 @@ export default function App() {
                       helperId: String(raw.helperId),
                       availableDays: Array.isArray(raw.availableDays)
                         ? (raw.availableDays as DayOfWeek[])
-                        : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
-                      startHour: String(raw.startHour || '08:00'),
-                      endHour: String(raw.endHour || '19:00'),
+                        : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                      startHour: String(raw.startHour || '00:00'),
+                      endHour: String(raw.endHour || '23:59'),
                       updatedAt: formatTimestampField(raw.updatedAt),
                     });
                   }
                 }
                 if (loadedAvailabilities.length > 0) {
-                  setAvailabilities(loadedAvailabilities);
+                  setAvailabilities(mergeWithInitialAvailabilities(loadedAvailabilities));
                 }
               })
               .catch((err) =>
@@ -560,25 +683,35 @@ export default function App() {
               );
           }
 
-          // If no helpers exist in Firestore yet and current user is Admin, bootstrap verified helpers
-          if (snap.empty && isAdmin && !isOfflineModeActive()) {
-            Promise.all([
-              ...INITIAL_VERIFIED_HELPERS.map((h) =>
-                setDoc(doc(db, 'helpers', h.helperId), {
-                  ...h,
-                  createdAt: serverTimestamp(),
-                  updatedAt: serverTimestamp(),
-                })
-              ),
-              ...INITIAL_HELPER_AVAILABILITIES.map((a) =>
-                setDoc(doc(db, 'availability', a.availabilityId), {
-                  ...a,
-                  updatedAt: serverTimestamp(),
-                })
-              ),
-            ]).catch(() => {
-              // Ignore bootstrap race
-            });
+          // If any initial verified helpers do not exist in Firestore yet and current user is Admin, bootstrap them
+          if (isAdmin && !isOfflineModeActive()) {
+            const existingIds = new Set(list.map((h) => h.helperId));
+            const missingHelpers = INITIAL_VERIFIED_HELPERS.filter(
+              (h) => !existingIds.has(h.helperId)
+            );
+            if (missingHelpers.length > 0) {
+              const missingIds = new Set(missingHelpers.map((h) => h.helperId));
+              const missingAvails = INITIAL_HELPER_AVAILABILITIES.filter((a) =>
+                missingIds.has(a.helperId)
+              );
+              Promise.all([
+                ...missingHelpers.map((h) =>
+                  setDoc(doc(db, 'helpers', h.helperId), {
+                    ...h,
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                  })
+                ),
+                ...missingAvails.map((a) =>
+                  setDoc(doc(db, 'availability', a.availabilityId), {
+                    ...a,
+                    updatedAt: serverTimestamp(),
+                  })
+                ),
+              ]).catch(() => {
+                // Ignore bootstrap race
+              });
+            }
           }
         },
         (err) => handleFirestoreError(err, OperationType.LIST, 'helpers')
@@ -760,13 +893,113 @@ export default function App() {
     return () => {
       unsubscribers.forEach((fn) => fn());
     };
-  }, [authReady, firebaseUser, firestoreUser]);
+  }, [authReady, isSandboxMode, firebaseUser, firestoreUser]);
+
+  // Test Mode Account Switching Helpers
+  const applyTestDatasetToState = (dataset: TestDatasetState) => {
+    setSystemConfig(dataset.systemConfig);
+    setSeniors(dataset.seniors);
+    setFamilyLinks(dataset.familyLinks);
+    setHelpers(dataset.helpers);
+    setAvailabilities(dataset.availabilities);
+    setBookings(dataset.bookings);
+    setBookingEvents(dataset.bookingEvents);
+    setReviews(dataset.reviews);
+    setIncidents(dataset.incidents);
+  };
+
+  const restoreLiveCacheToState = () => {
+    setSystemConfig(loadCachedJson('saathicare_cache_config', DEFAULT_SYSTEM_CONFIG));
+    setSeniors(loadCachedJson('saathicare_cache_seniors', []));
+    setFamilyLinks(loadCachedJson('saathicare_cache_familyLinks', []));
+    const cachedHelpers = loadCachedJson<HelperProfile[]>('saathicare_cache_helpers', []);
+    setHelpers(cachedHelpers.length > 0 ? mergeWithInitialHelpers(cachedHelpers) : getDefaultHelpersList());
+    const cachedAvail = loadCachedJson<HelperAvailability[]>('saathicare_cache_availabilities', []);
+    setAvailabilities(cachedAvail.length > 0 ? mergeWithInitialAvailabilities(cachedAvail) : getDefaultAvailabilitiesList());
+    setBookings(loadCachedJson('saathicare_cache_bookings', []));
+    setBookingEvents(loadCachedJson('saathicare_cache_events', []));
+    setReviews(loadCachedJson('saathicare_cache_reviews', []));
+    setIncidents(loadCachedJson('saathicare_cache_incidents', []));
+  };
+
+  const handleSelectTestAccount = (uid: string) => {
+    const account = findTestAccountByUid(uid);
+    if (!account) return;
+    setAuthError(null);
+    setTestResetNotice(null);
+    setSelectedBookingId(null);
+    setBookingModalOpen(false);
+    setSupportModalOpen(false);
+
+    if (!isSandboxMode) {
+      applyTestDatasetToState(loadOrCreateTestDataset());
+    }
+    try {
+      localStorage.setItem(ACTIVE_TEST_UID_KEY, account.profile.uid);
+    } catch {
+      // Ignore storage errors
+    }
+    setActiveTestUid(account.profile.uid);
+    setActiveTab(account.targetWorkspace);
+  };
+
+  const handleResetTestDataset = () => {
+    try {
+      localStorage.removeItem('saathicare_test_dataset_v1');
+      localStorage.removeItem('saathicare_test_dataset_v2');
+      localStorage.removeItem('saathicare_test_dataset_v3');
+      localStorage.removeItem(TEST_DATASET_STORAGE_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+    autoArrivedIdsRef.current.clear();
+    const fresh = createInitialTestDataset();
+    saveCachedJson(TEST_DATASET_STORAGE_KEY, fresh);
+    applyTestDatasetToState(fresh);
+    setSelectedBookingId(null);
+    setBookingModalOpen(false);
+    setSupportModalOpen(false);
+    setPresetService('hospital_accompaniment');
+    setPresetDuration(4);
+    setTestResetVersion((prev) => prev + 1);
+    if (isSandboxMode) {
+      setActiveTab('dashboard');
+    }
+    setTestResetNotice(
+      'Test data reset to initial sample bookings, senior profiles, and active consent links.'
+    );
+  };
+
+  const handleExitTestMode = () => {
+    try {
+      localStorage.removeItem(ACTIVE_TEST_UID_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+    autoArrivedIdsRef.current.clear();
+    setTestResetNotice(null);
+    setActiveTestUid(null);
+    setSelectedBookingId(null);
+    setBookingModalOpen(false);
+    setSupportModalOpen(false);
+    restoreLiveCacheToState();
+    setActiveTab('welcome');
+  };
 
   // Handlers
   const handleSignInGoogle = async () => {
     setAuthError(null);
     setAuthBusy(true);
     try {
+      if (isSandboxMode) {
+        try {
+          localStorage.removeItem(ACTIVE_TEST_UID_KEY);
+        } catch {
+          // Ignore storage errors
+        }
+        setActiveTestUid(null);
+        restoreLiveCacheToState();
+      }
       googleProvider.setCustomParameters({
         prompt: 'select_account',
       });
@@ -784,6 +1017,10 @@ export default function App() {
 
   const handleSignOut = async () => {
     setAuthError(null);
+    if (isSandboxMode) {
+      handleExitTestMode();
+      return;
+    }
     setAuthBusy(true);
     try {
       if (firebaseUser) {
@@ -806,13 +1043,7 @@ export default function App() {
       setActiveTab('welcome');
       return;
     }
-    if (currentUser.role === 'helper') {
-      setActiveTab('helper_workspace');
-    } else if (currentUser.role === 'admin') {
-      setActiveTab('admin_workspace');
-    } else {
-      setActiveTab('dashboard');
-    }
+    setActiveTab('dashboard');
   };
 
   const handleRegisterUser = async (payload: {
@@ -935,16 +1166,14 @@ export default function App() {
     setFirestoreUser(newProfile);
     saveCachedJson(`saathicare_user_${uid}`, newProfile);
 
-    if (payload.role === 'helper') setActiveTab('helper_workspace');
-    else if (payload.role === 'admin') setActiveTab('admin_workspace');
-    else setActiveTab('dashboard');
+    setActiveTab('dashboard');
   };
 
   // Create Senior Citizen Profile (from Booking Modal or Dashboard)
   const handleCreateSeniorProfile = async (
     profile: Omit<SeniorProfile, 'createdAt' | 'updatedAt'>
   ): Promise<SeniorProfile> => {
-    if (!currentUser || !firebaseUser) {
+    if (!currentUser || (!isSandboxMode && !firebaseUser)) {
       throw new Error('Authentication required to save Senior Citizen profile.');
     }
     const nowIso = new Date().toISOString();
@@ -961,17 +1190,19 @@ export default function App() {
       updatedAt: nowIso,
     };
 
-    const seniorPath = `seniorProfiles/${effectiveSeniorId}`;
-    await withFirestoreWriteFallback(
-      () =>
-        setDoc(doc(db, 'seniorProfiles', effectiveSeniorId), {
-          ...fullRecord,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        }),
-      OperationType.CREATE,
-      seniorPath
-    );
+    if (!isSandboxMode && firebaseUser) {
+      const seniorPath = `seniorProfiles/${effectiveSeniorId}`;
+      await withFirestoreWriteFallback(
+        () =>
+          setDoc(doc(db, 'seniorProfiles', effectiveSeniorId), {
+            ...fullRecord,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          }),
+        OperationType.CREATE,
+        seniorPath
+      );
+    }
 
     setSeniors((prev) => {
       const exists = prev.some((s) => s.seniorId === fullRecord.seniorId);
@@ -1220,7 +1451,7 @@ export default function App() {
                 `availability/${seedAvail.availabilityId}`
               );
             }
-          } else {
+          } else if (!seedHelper) {
             assignedHelper = null;
           }
         }
@@ -1234,7 +1465,7 @@ export default function App() {
     }
 
     const initialBookingStatus: BookingStatus = assignedHelper
-      ? 'assigned'
+      ? 'accepted'
       : 'pending_assignment';
 
     const newBookingRecord: BookingRecord = {
@@ -1276,13 +1507,31 @@ export default function App() {
       bookedByUid: newBookingRecord.bookedByUid,
       assignedHelperUid: newBookingRecord.assignedHelperUid,
       fromStatus: 'none',
-      toStatus: initialBookingStatus,
+      toStatus: assignedHelper ? 'assigned' : 'pending_assignment',
       actorUid: currentUser.uid,
       actorName: currentUser.fullName,
       actorRole: currentUser.role,
       note: String(serverData.auditNote),
       createdAt: nowIso,
     };
+
+    const confirmEventId = `evt_${Date.now()}_confirm`;
+    const immediateConfirmEvent: BookingEventRecord | null = assignedHelper
+      ? {
+          eventId: confirmEventId,
+          bookingId,
+          seniorId: newBookingRecord.seniorId,
+          bookedByUid: newBookingRecord.bookedByUid,
+          assignedHelperUid: newBookingRecord.assignedHelperUid,
+          fromStatus: 'assigned',
+          toStatus: 'accepted',
+          actorUid: currentUser.uid,
+          actorName: assignedHelper.fullName,
+          actorRole: 'helper',
+          note: `Helper ${assignedHelper.fullName} immediately confirmed schedule upon assignment.`,
+          createdAt: nowIso,
+        }
+      : null;
 
     // Always update local state immediately for instant UI responsiveness and offline continuity
     setBookings((prev) => {
@@ -1294,23 +1543,42 @@ export default function App() {
         : [newBookingRecord, ...prev];
     });
     setBookingEvents((prev) => {
-      const exists = prev.some((e) => e.eventId === initialEvent.eventId);
-      return exists ? prev : [...prev, initialEvent];
+      const toAdd = immediateConfirmEvent
+        ? [initialEvent, immediateConfirmEvent]
+        : [initialEvent];
+      const existingIds = new Set(prev.map((e) => e.eventId));
+      return [...prev, ...toAdd.filter((e) => !existingIds.has(e.eventId))];
     });
 
-    // 2. Persist to Cloud Firestore if authenticated
+    // 2. Persist to Cloud Firestore if authenticated (create with 'assigned' to satisfy allow create, then immediately confirm to 'accepted')
     if (!isSandboxMode && firebaseUser) {
       const bookingPath = `bookings/${bookingId}`;
+      const firestoreInitialStatus: BookingStatus = assignedHelper
+        ? 'assigned'
+        : 'pending_assignment';
       await withFirestoreWriteFallback(
         () =>
           setDoc(doc(db, 'bookings', bookingId), {
             ...newBookingRecord,
+            status: firestoreInitialStatus,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           }),
         OperationType.CREATE,
         bookingPath
       );
+
+      if (assignedHelper) {
+        await withFirestoreWriteFallback(
+          () =>
+            updateDoc(doc(db, 'bookings', bookingId), {
+              status: 'accepted',
+              updatedAt: serverTimestamp(),
+            }),
+          OperationType.UPDATE,
+          bookingPath
+        );
+      }
 
       const eventPath = `bookingEvents/${eventId}`;
       await withFirestoreWriteFallback(
@@ -1322,6 +1590,18 @@ export default function App() {
         OperationType.CREATE,
         eventPath
       );
+
+      if (immediateConfirmEvent) {
+        await withFirestoreWriteFallback(
+          () =>
+            setDoc(doc(db, 'bookingEvents', confirmEventId), {
+              ...immediateConfirmEvent,
+              createdAt: serverTimestamp(),
+            }),
+          OperationType.CREATE,
+          `bookingEvents/${confirmEventId}`
+        );
+      }
     }
 
     return newBookingRecord;
@@ -1385,8 +1665,11 @@ export default function App() {
 
     const nowIso = new Date().toISOString();
     const eventId = `evt_${Date.now()}`;
+    const shouldAutoConfirmAssignment = toStatus === 'assigned' && Boolean(targetHelper);
+    const effectiveStatus: BookingStatus = shouldAutoConfirmAssignment ? 'accepted' : toStatus;
+
     const updatedFields: Partial<BookingRecord> = {
-      status: toStatus,
+      status: effectiveStatus,
       updatedAt: nowIso,
     };
 
@@ -1418,6 +1701,25 @@ export default function App() {
       createdAt: nowIso,
     };
 
+    const confirmEventId = `evt_${Date.now()}_confirm`;
+    const confirmEvent: BookingEventRecord | null =
+      shouldAutoConfirmAssignment && targetHelper
+        ? {
+            eventId: confirmEventId,
+            bookingId: booking.bookingId,
+            seniorId: booking.seniorId,
+            bookedByUid: booking.bookedByUid,
+            assignedHelperUid: targetHelper.helperId,
+            fromStatus: 'assigned',
+            toStatus: 'accepted',
+            actorUid: currentUser.uid,
+            actorName: targetHelper.fullName,
+            actorRole: 'helper',
+            note: `Helper ${targetHelper.fullName} immediately confirmed schedule upon assignment.`,
+            createdAt: nowIso,
+          }
+        : null;
+
     // Update local state immediately
     setBookings((prev) =>
       prev.map((b) =>
@@ -1425,8 +1727,9 @@ export default function App() {
       )
     );
     setBookingEvents((prev) => {
-      const exists = prev.some((e) => e.eventId === newEvent.eventId);
-      return exists ? prev : [...prev, newEvent];
+      const toAdd = confirmEvent ? [newEvent, confirmEvent] : [newEvent];
+      const existingIds = new Set(prev.map((e) => e.eventId));
+      return [...prev, ...toAdd.filter((e) => !existingIds.has(e.eventId))];
     });
 
     if (!isSandboxMode && firebaseUser) {
@@ -1446,8 +1749,98 @@ export default function App() {
         OperationType.CREATE,
         eventPath
       );
+
+      if (confirmEvent) {
+        await withFirestoreWriteFallback(
+          () =>
+            setDoc(doc(db, 'bookingEvents', confirmEventId), {
+              ...confirmEvent,
+              createdAt: serverTimestamp(),
+            }),
+          OperationType.CREATE,
+          `bookingEvents/${confirmEventId}`
+        );
+      }
     }
   };
+
+  // Automatic Scheduled Arrival at Pickup (accepted -> arrived when scheduled start time is reached)
+  useEffect(() => {
+    const checkAndArriveBookings = () => {
+      const dueBookings = findBookingsReadyForAutomaticArrival(bookings, new Date()).filter(
+        (b) => {
+          if (autoArrivedIdsRef.current.has(b.bookingId)) return false;
+          if (isSandboxMode) return true;
+          return Boolean(
+            currentUser &&
+              (b.bookedByUid === currentUser.uid || b.seniorId === currentUser.uid)
+          );
+        }
+      );
+
+      if (dueBookings.length === 0) return;
+
+      const nowIso = new Date().toISOString();
+      const arrivedMap = new Map<string, BookingRecord>();
+      const arrivedEvents: BookingEventRecord[] = [];
+
+      for (const b of dueBookings) {
+        autoArrivedIdsRef.current.add(b.bookingId);
+        const updatedBooking: BookingRecord = {
+          ...b,
+          status: 'arrived',
+          updatedAt: nowIso,
+        };
+        arrivedMap.set(b.bookingId, updatedBooking);
+        arrivedEvents.push({
+          eventId: `evt_auto_arrive_${b.bookingId}_${Date.now()}`,
+          bookingId: b.bookingId,
+          seniorId: b.seniorId,
+          bookedByUid: b.bookedByUid,
+          assignedHelperUid: b.assignedHelperUid,
+          fromStatus: 'accepted',
+          toStatus: 'arrived',
+          actorUid: currentUser?.uid || b.bookedByUid,
+          actorName: b.assignedHelperName || 'SaathiCare Schedule Dispatch',
+          actorRole: 'helper',
+          note: `Scheduled pickup time (${b.date} ${b.startTime}) reached — companion ${b.assignedHelperName || 'helper'} automatically arrived at pickup.`,
+          createdAt: nowIso,
+        });
+      }
+
+      setBookings((prev) =>
+        prev.map((b) => arrivedMap.get(b.bookingId) ?? b)
+      );
+      setBookingEvents((prev) => {
+        const existingIds = new Set(prev.map((e) => e.eventId));
+        return [...prev, ...arrivedEvents.filter((e) => !existingIds.has(e.eventId))];
+      });
+
+      if (!isSandboxMode && firebaseUser && currentUser && !isOfflineModeActive()) {
+        for (const evt of arrivedEvents) {
+          const originalBooking = dueBookings.find((b) => b.bookingId === evt.bookingId);
+          if (!originalBooking) continue;
+          syncAndUpdateBookingInFirestore(originalBooking, {
+            status: 'arrived',
+            updatedAt: nowIso,
+          }).catch(() => {});
+          withFirestoreWriteFallback(
+            () =>
+              setDoc(doc(db, 'bookingEvents', evt.eventId), {
+                ...evt,
+                createdAt: serverTimestamp(),
+              }),
+            OperationType.CREATE,
+            `bookingEvents/${evt.eventId}`
+          ).catch(() => {});
+        }
+      }
+    };
+
+    checkAndArriveBookings();
+    const timer = window.setInterval(checkAndArriveBookings, 10000);
+    return () => window.clearInterval(timer);
+  }, [bookings, currentUser?.uid, isSandboxMode, firebaseUser]);
 
   // Reconcile local/cached booking state with Cloud Firestore before running updateDoc
   const syncAndUpdateBookingInFirestore = async (
@@ -2139,10 +2532,14 @@ export default function App() {
         activeTab={activeTab}
         onSelectTab={(tab) => setActiveTab(tab)}
         currentUser={currentUser}
-        firebaseEmail={firebaseUser?.email || null}
+        firebaseEmail={activeTestAccount ? activeTestAccount.profile.email : firebaseUser?.email || null}
+        activeTestAccountUid={activeTestAccount?.profile.uid || null}
         authBusy={authBusy}
         onSignInGoogle={handleSignInGoogle}
         onSignOut={handleSignOut}
+        onSelectTestAccount={handleSelectTestAccount}
+        onResetTestDataset={handleResetTestDataset}
+        onExitTestMode={handleExitTestMode}
         onOpenNewBooking={() => setBookingModalOpen(true)}
         onOpenSupportModal={() => {
           setSupportBookingId('general');
@@ -2152,8 +2549,90 @@ export default function App() {
         supportEmail={systemConfig.supportEmail}
       />
 
+      {/* Persistent Family Member Test Mode Bar */}
+      {activeTestAccount && (
+        <div
+          role="region"
+          aria-label="Family Member Test Session Controls"
+          className="bg-[#FAF5EE] border-b border-[#E7E2DA] px-6 py-2.5 text-xs"
+        >
+          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-bold text-[#9A3412] uppercase tracking-wide">
+                Test Mode
+              </span>
+              <span className="text-[#57534E]">Family Member:</span>
+              {TEST_ACCOUNTS.map((acc) => {
+                const isActive = acc.profile.uid === activeTestAccount.profile.uid;
+                return (
+                  <button
+                    key={acc.profile.uid}
+                    type="button"
+                    onClick={() => handleSelectTestAccount(acc.profile.uid)}
+                    className={`px-2.5 py-1 rounded-md font-semibold whitespace-nowrap ${
+                      isActive
+                        ? 'bg-[#9A3412] text-white'
+                        : 'bg-white text-[#1C1917] border border-[#D6D0C4] hover:bg-[#F3EFEA]'
+                    }`}
+                  >
+                    {acc.profile.fullName.split(' ')[0]}
+                  </button>
+                );
+              })}
+              <span className="text-[#57534E]">
+                (Helper Portal &amp; Coordinator Desk: Out of Scope)
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPresetService('hospital_accompaniment');
+                  setPresetDuration(4);
+                  setActiveTab('dashboard');
+                  setBookingModalOpen(true);
+                }}
+                className="px-2.5 py-1 bg-[#9A3412] text-white rounded-md font-semibold hover:bg-[#7C2D12] whitespace-nowrap"
+              >
+                Request Hospital Visit
+              </button>
+              <button
+                type="button"
+                onClick={handleResetTestDataset}
+                className="px-2.5 py-1 bg-white text-[#1C1917] border border-[#D6D0C4] rounded-md font-semibold hover:bg-[#F3EFEA] whitespace-nowrap"
+              >
+                Reset Test Data
+              </button>
+              <button
+                type="button"
+                onClick={handleExitTestMode}
+                className="px-2.5 py-1 bg-[#1C1917] text-white rounded-md font-semibold hover:bg-[#292524] whitespace-nowrap"
+              >
+                Exit Test Mode
+              </button>
+            </div>
+          </div>
+          {testResetNotice && (
+            <div
+              role="status"
+              className="max-w-7xl mx-auto mt-2.5 p-2.5 bg-[#F0FDF4] border border-[#BBF7D0] rounded-lg text-[#14532D] flex items-center justify-between gap-3"
+            >
+              <span className="font-medium">{testResetNotice}</span>
+              <button
+                type="button"
+                onClick={() => setTestResetNotice(null)}
+                className="text-xs font-semibold text-[#14532D] hover:underline shrink-0"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       <main className="flex-1">
-        {(!authReady || profileLoading) && (
+        {(!authReady || profileLoading) && !isSandboxMode && (
           <div
             role="status"
             aria-live="polite"
@@ -2170,12 +2649,12 @@ export default function App() {
           </div>
         )}
 
-        {authReady && !profileLoading && (activeTab === 'welcome' || activeTab === 'services') && (
+        {(authReady || isSandboxMode) && !profileLoading && (activeTab === 'welcome' || activeTab === 'services') && (
           <HeroWelcome
             mode={activeTab}
             systemConfig={systemConfig}
             firebaseAuthUser={
-              firebaseUser
+              !isSandboxMode && firebaseUser
                 ? {
                     uid: firebaseUser.uid,
                     email: firebaseUser.email,
@@ -2185,8 +2664,10 @@ export default function App() {
                 : null
             }
             currentUser={currentUser}
+            activeTestAccountUid={activeTestAccount?.profile.uid || null}
             authBusy={authBusy}
             onSignInGoogle={handleSignInGoogle}
+            onSelectTestAccount={handleSelectTestAccount}
             onRegisterUser={handleRegisterUser}
             onStartBookingWithPreset={(service, duration) => {
               setPresetService(service);
@@ -2203,28 +2684,28 @@ export default function App() {
         )}
 
         {/* Role-Aware Route: Senior & Family Workspace */}
-        {authReady && !profileLoading && activeTab === 'dashboard' && (
+        {(authReady || isSandboxMode) && !profileLoading && activeTab === 'dashboard' && (
           <>
-            {!firebaseUser ? (
+            {!firebaseUser && !isSandboxMode ? (
               <div className="max-w-3xl mx-auto px-6 py-12">
                 <div
                   role="region"
-                  aria-labelledby="senior-auth-gate-heading"
+                  aria-labelledby="family-auth-gate-heading"
                   className="bg-white border border-[#E7E2DA] rounded-xl p-8 space-y-4"
                 >
                   <div className="text-xs font-semibold text-[#9A3412]">
-                    Role-Protected Workspace · Senior Citizen & Authorized Family
+                    Family Member Workspace · Bengaluru Hospital &amp; Companion Visits
                   </div>
                   <h1
-                    id="senior-auth-gate-heading"
+                    id="family-auth-gate-heading"
                     className="text-2xl font-bold text-[#1C1917]"
                   >
-                    Sign in to access Senior & Family Companion Bookings
+                    Sign in as a Family Member to request a hospital visit
                   </h1>
                   <p className="text-sm text-[#57534E] leading-relaxed">
-                    Please authenticate with your Google account via Firebase Authentication to book
-                    hospital accompaniment, errands, or companionship visits, or to manage family
-                    consent links.
+                    Authenticate with your Google account or continue immediately with the
+                    pre-configured Family Member test account to request a hospital accompaniment
+                    visit and track its status.
                   </p>
                   {authError && (
                     <div
@@ -2235,20 +2716,27 @@ export default function App() {
                     </div>
                   )}
                   <div className="pt-2 flex flex-wrap gap-3">
+                    {TEST_ACCOUNTS.map((acc, index) => (
+                      <button
+                        key={acc.profile.uid}
+                        type="button"
+                        onClick={() => handleSelectTestAccount(acc.profile.uid)}
+                        className={
+                          index === 0
+                            ? 'px-4 py-2.5 bg-[#9A3412] text-white text-sm font-semibold rounded-lg hover:bg-[#7C2D12]'
+                            : 'px-4 py-2.5 bg-[#FAF8F5] text-[#1C1917] border border-[#D6D0C4] text-sm font-semibold rounded-lg hover:bg-[#F3EFEA]'
+                        }
+                      >
+                        Test as {acc.profile.fullName.split(' ')[0]}
+                      </button>
+                    ))}
                     <button
                       type="button"
                       onClick={handleSignInGoogle}
                       disabled={authBusy}
-                      className="px-5 py-2.5 bg-[#9A3412] text-white text-sm font-semibold rounded-lg hover:bg-[#7C2D12] disabled:opacity-50"
+                      className="px-4 py-2.5 bg-[#1C1917] text-white text-sm font-semibold rounded-lg hover:bg-[#292524] disabled:opacity-50"
                     >
                       {authBusy ? 'Signing In...' : 'Sign In with Google'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('welcome')}
-                      className="px-4 py-2.5 bg-[#FAF8F5] text-[#1C1917] border border-[#D6D0C4] text-sm font-semibold rounded-lg hover:bg-[#F3EFEA]"
-                    >
-                      Back to Overview
                     </button>
                   </div>
                 </div>
@@ -2257,15 +2745,21 @@ export default function App() {
               <HeroWelcome
                 mode="welcome"
                 systemConfig={systemConfig}
-                firebaseAuthUser={{
-                  uid: firebaseUser.uid,
-                  email: firebaseUser.email,
-                  displayName: firebaseUser.displayName,
-                  emailVerified: firebaseUser.emailVerified,
-                }}
+                firebaseAuthUser={
+                  firebaseUser
+                    ? {
+                        uid: firebaseUser.uid,
+                        email: firebaseUser.email,
+                        displayName: firebaseUser.displayName,
+                        emailVerified: firebaseUser.emailVerified,
+                      }
+                    : null
+                }
                 currentUser={null}
+                activeTestAccountUid={null}
                 authBusy={authBusy}
                 onSignInGoogle={handleSignInGoogle}
+                onSelectTestAccount={handleSelectTestAccount}
                 onRegisterUser={handleRegisterUser}
                 onStartBookingWithPreset={(service, duration) => {
                   setPresetService(service);
@@ -2288,17 +2782,29 @@ export default function App() {
                     <strong>Companion Helper</strong> role. Helpers manage their schedule and
                     assigned visits from the Helper Portal.
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('helper_workspace')}
-                    className="px-4 py-2.5 bg-[#1C1917] text-white text-xs font-semibold rounded-lg hover:bg-[#292524]"
-                  >
-                    Go to Helper Portal
-                  </button>
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('helper_workspace')}
+                      className="px-4 py-2.5 bg-[#1C1917] text-white text-xs font-semibold rounded-lg hover:bg-[#292524]"
+                    >
+                      Go to Helper Portal
+                    </button>
+                    {isSandboxMode && (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectTestAccount('test_senior_lakshmi')}
+                        className="px-4 py-2.5 bg-[#FAF8F5] text-[#1C1917] border border-[#D6D0C4] text-xs font-semibold rounded-lg hover:bg-[#F3EFEA]"
+                      >
+                        Switch to Test Senior (Lakshmi)
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             ) : (
               <SeniorFamilyWorkspace
+                key={`${currentUser.uid}_${testResetVersion}`}
                 currentUser={currentUser}
                 isSandboxMode={isSandboxMode}
                 seniors={seniors}
@@ -2308,6 +2814,9 @@ export default function App() {
                 systemConfig={systemConfig}
                 onOpenNewBooking={() => setBookingModalOpen(true)}
                 onSelectBooking={(b) => setSelectedBookingId(b.bookingId)}
+                onTransitionStatus={(b, toStatus, note) =>
+                  handleTransitionBookingStatus(b, toStatus, note)
+                }
                 onRequestFamilyLink={handleRequestFamilyLink}
                 onUpdateFamilyLinkStatus={handleUpdateFamilyLinkStatus}
                 onCreateSeniorProfile={handleCreateSeniorProfile}
@@ -2320,207 +2829,112 @@ export default function App() {
                         : s
                     )
                   );
-                  const path = `seniorProfiles/${updated.seniorId}`;
-                  await withFirestoreWriteFallback(
-                    () =>
-                      updateDoc(doc(db, 'seniorProfiles', updated.seniorId), {
-                        locality: updated.locality,
-                        address: updated.address,
-                        mobilityNote: updated.mobilityNote,
-                        allowFamilyBookings: updated.allowFamilyBookings,
-                        updatedAt: serverTimestamp(),
-                      }),
-                    OperationType.UPDATE,
-                    path
-                  );
-                }}
-              />
-            )}
-          </>
-        )}
-
-        {/* Role-Aware Route: Helper Portal */}
-        {authReady && !profileLoading && activeTab === 'helper_workspace' && (
-          <>
-            {!firebaseUser ? (
-              <div className="max-w-3xl mx-auto px-6 py-12">
-                <div
-                  role="region"
-                  aria-labelledby="helper-auth-gate-heading"
-                  className="bg-white border border-[#E7E2DA] rounded-xl p-8 space-y-4"
-                >
-                  <div className="text-xs font-semibold text-[#9A3412]">
-                    Role-Protected Workspace · Companion Helper Portal
-                  </div>
-                  <h1
-                    id="helper-auth-gate-heading"
-                    className="text-2xl font-bold text-[#1C1917]"
-                  >
-                    Sign in to access Helper Schedule & Verification Status
-                  </h1>
-                  <p className="text-sm text-[#57534E] leading-relaxed">
-                    Companion helpers must sign in with Google to view their verification status,
-                    update availability, and accept or update assigned senior visits.
-                  </p>
-                  {authError && (
-                    <div
-                      role="alert"
-                      className="p-4 bg-[#FEF2F2] border border-[#FECACA] rounded-lg text-sm text-[#991B1B]"
-                    >
-                      {authError}
-                    </div>
-                  )}
-                  <div className="pt-2 flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      onClick={handleSignInGoogle}
-                      disabled={authBusy}
-                      className="px-5 py-2.5 bg-[#9A3412] text-white text-sm font-semibold rounded-lg hover:bg-[#7C2D12] disabled:opacity-50"
-                    >
-                      {authBusy ? 'Signing In...' : 'Sign In with Google'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('welcome')}
-                      className="px-4 py-2.5 bg-[#FAF8F5] text-[#1C1917] border border-[#D6D0C4] text-sm font-semibold rounded-lg hover:bg-[#F3EFEA]"
-                    >
-                      Back to Overview
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : !currentUser ? (
-              <HeroWelcome
-                mode="welcome"
-                systemConfig={systemConfig}
-                firebaseAuthUser={{
-                  uid: firebaseUser.uid,
-                  email: firebaseUser.email,
-                  displayName: firebaseUser.displayName,
-                  emailVerified: firebaseUser.emailVerified,
-                }}
-                currentUser={null}
-                authBusy={authBusy}
-                onSignInGoogle={handleSignInGoogle}
-                onRegisterUser={handleRegisterUser}
-                onStartBookingWithPreset={(service, duration) => {
-                  setPresetService(service);
-                  setPresetDuration(duration);
-                }}
-                onNavigateToRoleWorkspace={handleNavigateToRoleWorkspace}
-                authError={authError}
-              />
-            ) : currentUser.role !== 'helper' && currentUser.role !== 'admin' ? (
-              <div className="max-w-3xl mx-auto px-6 py-12">
-                <div
-                  role="alert"
-                  className="bg-white border border-[#E7E2DA] rounded-xl p-8 space-y-4"
-                >
-                  <h1 className="text-2xl font-bold text-[#1C1917]">
-                    Companion Helper Role Required
-                  </h1>
-                  <p className="text-sm text-[#57534E]">
-                    You are currently signed in as <strong>{currentUser.fullName}</strong> (
-                    <strong>{currentUser.role.replace('_', ' ')}</strong>). Only registered
-                    companion helpers can access the Helper Portal.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('dashboard')}
-                    className="px-4 py-2.5 bg-[#1C1917] text-white text-xs font-semibold rounded-lg hover:bg-[#292524]"
-                  >
-                    Return to Senior & Family Dashboard
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <HelperWorkspace
-                currentUser={currentUser}
-                isSandboxMode={isSandboxMode}
-                helpers={helpers}
-                availabilities={availabilities}
-                bookings={bookings}
-                reviews={reviews}
-                systemConfig={systemConfig}
-                onSelectBooking={(b) => setSelectedBookingId(b.bookingId)}
-                onTransitionStatus={(booking, toStatus, note) =>
-                  handleTransitionBookingStatus(booking, toStatus, note)
-                }
-                onUpdateHelperProfile={async (updated) => {
-                  const nowIso = new Date().toISOString();
-                  setHelpers((prev) =>
-                    prev.map((h) =>
-                      h.helperId === updated.helperId
-                        ? { ...updated, updatedAt: nowIso }
-                        : h
-                    )
-                  );
-                  const path = `helpers/${updated.helperId}`;
-                  await withFirestoreWriteFallback(
-                    () =>
-                      updateDoc(doc(db, 'helpers', updated.helperId), {
-                        isActive: updated.isActive,
-                        updatedAt: serverTimestamp(),
-                      }),
-                    OperationType.UPDATE,
-                    path
-                  );
-                }}
-                onUpdateAvailability={async (updated) => {
-                  const nowIso = new Date().toISOString();
-                  const nextAvail = { ...updated, updatedAt: nowIso };
-                  setAvailabilities((prev) => {
-                    const exists = prev.some(
-                      (a) => a.availabilityId === updated.availabilityId
+                  if (!isSandboxMode && firebaseUser) {
+                    const path = `seniorProfiles/${updated.seniorId}`;
+                    await withFirestoreWriteFallback(
+                      () =>
+                        updateDoc(doc(db, 'seniorProfiles', updated.seniorId), {
+                          locality: updated.locality,
+                          address: updated.address,
+                          mobilityNote: updated.mobilityNote,
+                          allowFamilyBookings: updated.allowFamilyBookings,
+                          updatedAt: serverTimestamp(),
+                        }),
+                      OperationType.UPDATE,
+                      path
                     );
-                    return exists
-                      ? prev.map((a) =>
-                          a.availabilityId === updated.availabilityId
-                            ? nextAvail
-                            : a
-                        )
-                      : [nextAvail, ...prev];
-                  });
-                  const path = `availability/${updated.availabilityId}`;
-                  await withFirestoreWriteFallback(
-                    () =>
-                      setDoc(doc(db, 'availability', updated.availabilityId), {
-                        ...updated,
-                        updatedAt: serverTimestamp(),
-                      }),
-                    OperationType.WRITE,
-                    path
-                  );
+                  }
                 }}
               />
             )}
           </>
         )}
 
-        {/* Role-Aware Route: Coordinator Admin Desk */}
-        {authReady && !profileLoading && activeTab === 'admin_workspace' && (
-          <AdminWorkspace
-            currentUser={currentUser}
-            isSandboxMode={isSandboxMode}
-            bookings={bookings}
-            helpers={helpers}
-            incidents={incidents}
-            systemConfig={systemConfig}
-            onSelectBooking={(b) => setSelectedBookingId(b.bookingId)}
-            onAssignHelperToBooking={(booking, helper) =>
-              handleTransitionBookingStatus(
-                booking,
-                'assigned',
-                `Coordinator assigned verified helper ${helper.fullName}. Awaiting helper acceptance.`,
-                helper
-              )
-            }
-            onVerifyHelper={handleVerifyHelper}
-            onUpdateSystemConfig={handleUpdateSystemConfig}
-            onUpdateIncident={handleUpdateIncident}
-            onSignInGoogle={handleSignInGoogle}
-            onReturnHome={handleNavigateToRoleWorkspace}
-          />
+        {/* Out of Scope Route: Helper Portal */}
+        {(authReady || isSandboxMode) && !profileLoading && activeTab === 'helper_workspace' && (
+          <div className="max-w-3xl mx-auto px-6 py-12">
+            <div
+              role="region"
+              aria-labelledby="helper-out-of-scope-heading"
+              className="bg-white border border-[#E7E2DA] rounded-xl p-8 space-y-5"
+            >
+              <div className="text-xs font-semibold text-[#9A3412] uppercase tracking-wide">
+                Out of Scope · Single-Role Release
+              </div>
+              <h1
+                id="helper-out-of-scope-heading"
+                className="text-2xl sm:text-3xl font-bold text-[#1C1917]"
+              >
+                Helper Portal — Out of Scope
+              </h1>
+              <p className="text-sm text-[#57534E] leading-relaxed">
+                The <strong>Helper Portal</strong> (companion shift availability, helper verification
+                status, and helper visit check-ins) is <strong>out of scope</strong> for this
+                release. Only the <strong>Family Member</strong> user journey is active: requesting
+                a hospital visit and viewing booking status.
+              </p>
+              <div className="pt-2 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('dashboard')}
+                  className="px-5 py-2.5 bg-[#9A3412] text-white text-sm font-semibold rounded-lg hover:bg-[#7C2D12]"
+                >
+                  Go to Family Dashboard
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('welcome')}
+                  className="px-4 py-2.5 bg-[#FAF8F5] text-[#1C1917] border border-[#D6D0C4] text-sm font-semibold rounded-lg hover:bg-[#F3EFEA]"
+                >
+                  Back to Overview
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Out of Scope Route: Coordinator Desk */}
+        {(authReady || isSandboxMode) && !profileLoading && activeTab === 'admin_workspace' && (
+          <div className="max-w-3xl mx-auto px-6 py-12">
+            <div
+              role="region"
+              aria-labelledby="admin-out-of-scope-heading"
+              className="bg-white border border-[#E7E2DA] rounded-xl p-8 space-y-5"
+            >
+              <div className="text-xs font-semibold text-[#9A3412] uppercase tracking-wide">
+                Out of Scope · Single-Role Release
+              </div>
+              <h1
+                id="admin-out-of-scope-heading"
+                className="text-2xl sm:text-3xl font-bold text-[#1C1917]"
+              >
+                Coordinator Desk — Out of Scope
+              </h1>
+              <p className="text-sm text-[#57534E] leading-relaxed">
+                The <strong>Coordinator Desk</strong> (helper background verification review, manual
+                dispatch overrides, incident escalation queue, and rate settings) is{' '}
+                <strong>out of scope</strong> for this release. Only the{' '}
+                <strong>Family Member</strong> user journey is active: requesting a hospital visit
+                and viewing booking status.
+              </p>
+              <div className="pt-2 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('dashboard')}
+                  className="px-5 py-2.5 bg-[#9A3412] text-white text-sm font-semibold rounded-lg hover:bg-[#7C2D12]"
+                >
+                  Go to Family Dashboard
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('welcome')}
+                  className="px-4 py-2.5 bg-[#FAF8F5] text-[#1C1917] border border-[#D6D0C4] text-sm font-semibold rounded-lg hover:bg-[#F3EFEA]"
+                >
+                  Back to Overview
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </main>
 

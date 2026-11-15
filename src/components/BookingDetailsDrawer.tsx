@@ -274,6 +274,10 @@ export const BookingDetailsDrawer: React.FC<BookingDetailsDrawerProps> = ({
     (currentUser.role === 'helper' && booking.assignedHelperUid === currentUser.uid) ||
     (currentUser.role === 'admin' && Boolean(booking.assignedHelperUid));
 
+  const isCustomerParticipant =
+    (currentUser.role === 'family_member' || currentUser.role === 'senior') &&
+    (booking.seniorId === currentUser.uid || booking.bookedByUid === currentUser.uid);
+
   const canReview =
     booking.status === 'completed' &&
     !existingReview &&
@@ -433,8 +437,14 @@ export const BookingDetailsDrawer: React.FC<BookingDetailsDrawerProps> = ({
               </div>
               <p className="text-xs text-[#57534E]">
                 {booking.status === 'assigned'
-                  ? 'Note: Helper has been selected by the coordinator, but this assignment is NOT confirmed until the helper accepts it.'
-                  : 'Confirmed: Helper has accepted this assignment and is scheduled for the visit.'}
+                  ? 'Note: Helper has been selected, confirming assignment.'
+                  : booking.status === 'accepted'
+                  ? `Confirmed: ${booking.assignedHelperName} has confirmed this visit and will automatically arrive at pickup at the scheduled time (${booking.date} · ${booking.startTime}).`
+                  : booking.status === 'arrived'
+                  ? `Arrived: ${booking.assignedHelperName} has arrived at the pickup address. You can now mark the visit In Progress.`
+                  : booking.status === 'in_progress'
+                  ? `In Progress: Accompaniment with ${booking.assignedHelperName} is underway. Mark the visit Completed once finished.`
+                  : 'Confirmed: Helper completed this companion visit schedule.'}
               </p>
             </div>
           ) : (
@@ -666,6 +676,60 @@ export const BookingDetailsDrawer: React.FC<BookingDetailsDrawerProps> = ({
             </div>
           </div>
         </section>
+
+        {/* Customer Visit Controls (Visit In Progress & Visit Completed) */}
+        {isCustomerParticipant &&
+          ['accepted', 'arrived', 'in_progress'].includes(booking.status) && (
+            <section
+              aria-labelledby="customer-visit-controls-heading"
+              className="p-5 bg-[#FAF8F5] border border-[#E7E2DA] rounded-xl space-y-3"
+            >
+              <div className="space-y-1">
+                <h3 id="customer-visit-controls-heading" className="text-sm font-bold text-[#1C1917]">
+                  Customer Visit Controls
+                </h3>
+                <p className="text-xs text-[#57534E]">
+                  {booking.status === 'accepted'
+                    ? `Your helper is confirmed. Arrival at pickup will update automatically at the scheduled time (${booking.date} · ${booking.startTime}), after which you can start and complete the visit.`
+                    : booking.status === 'arrived'
+                    ? 'Helper has arrived at pickup. Start the visit when accompaniment begins.'
+                    : 'Visit is currently in progress. Mark the visit completed once the senior returns safely.'}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                {booking.status === 'arrived' && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      handleActionTransition(
+                        'in_progress',
+                        `Visit started by ${currentUser.fullName} after helper arrival at pickup.`
+                      )
+                    }
+                    className="px-4 py-2.5 bg-[#9A3412] text-white text-sm font-semibold rounded-lg hover:bg-[#7C2D12] disabled:opacity-50 whitespace-nowrap"
+                  >
+                    Start Visit (Mark Visit In Progress)
+                  </button>
+                )}
+                {booking.status === 'in_progress' && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      handleActionTransition(
+                        'completed',
+                        `Visit completed and confirmed by ${currentUser.fullName}.`
+                      )
+                    }
+                    className="px-4 py-2.5 bg-[#14532D] text-white text-sm font-semibold rounded-lg hover:bg-[#166534] disabled:opacity-50 whitespace-nowrap"
+                  >
+                    Complete Visit (Mark Visit Completed)
+                  </button>
+                )}
+              </div>
+            </section>
+          )}
 
         {/* Helper Step-by-Step Transition Controls */}
         {isAssignedHelper && (

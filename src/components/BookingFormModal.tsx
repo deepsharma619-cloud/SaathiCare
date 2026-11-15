@@ -95,7 +95,7 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
   );
   const [serviceType, setServiceType] = useState<ServiceType>(initialServiceType);
   const [durationHours, setDurationHours] = useState<DurationHours>(initialDurationHours);
-  const [date, setDate] = useState<string>('2026-10-29');
+  const [date, setDate] = useState<string>('2026-11-18');
   const [startTime, setStartTime] = useState<string>('09:30');
   const [locality, setLocality] = useState<string>(
     eligibleSeniors[0]?.locality || systemConfig.serviceAreas[0] || 'Indiranagar'
@@ -987,7 +987,7 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
                   htmlFor="booking-start-time"
                   className="block text-sm font-semibold text-[#1C1917] mb-1.5"
                 >
-                  Start Time (06:00–20:00)
+                  Start Time (24/7 Available)
                 </label>
                 <input
                   id="booking-start-time"
@@ -1120,7 +1120,7 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
                   <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>
                     {liveAvailabilitySelection.matchedHelper
-                      ? 'Available · Assigned Immediately on Submit'
+                      ? 'Available · Assigned & Confirmed Immediately on Submit'
                       : 'Will Queue as Pending Assignment'}
                   </span>
                 </span>
@@ -1139,7 +1139,9 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
                     with <strong>0 schedule conflicts</strong>.
                   </p>
                   <p className="text-[#166534]">
-                    This companion helper will be assigned immediately when you submit the booking.
+                    This companion helper will be assigned and confirmed immediately upon submission,
+                    and will automatically arrive at pickup at the scheduled time ({date} at{' '}
+                    {startTime}).
                   </p>
                 </div>
               ) : (
@@ -1156,7 +1158,7 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
                     ))}
                   </ul>
                   <p className="pt-1">
-                    Tip: Adjust the start time (e.g., 09:00–15:00) or locality, or submit to place
+                    Tip: Adjust the start time, duration, or locality, or submit to place
                     in the Coordinator Dispatch queue.
                   </p>
                 </div>
@@ -1280,9 +1282,9 @@ export const BookingFormModal: React.FC<BookingFormModalProps> = ({
                   <strong>Cancellation Policy:</strong> {priceSummary.cancellationPolicy}
                 </p>
                 <p>
-                  <strong>Immediate Helper Assignment:</strong>{' '}
+                  <strong>Immediate Helper Assignment &amp; Confirmation:</strong>{' '}
                   {liveAvailabilitySelection.matchedHelper
-                    ? `Verified helper ${liveAvailabilitySelection.matchedHelper.fullName} is available and will be assigned immediately upon booking submission.`
+                    ? `Verified helper ${liveAvailabilitySelection.matchedHelper.fullName} is available and will be assigned and confirmed immediately upon booking submission.`
                     : 'No helper is currently free for this exact window; submitting places the booking in Pending Assignment for coordinator dispatch.'}
                 </p>
               </div>

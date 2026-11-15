@@ -60,6 +60,7 @@ interface AdminWorkspaceProps {
   ) => Promise<void>;
   onSignInGoogle: () => void;
   onReturnHome: () => void;
+  onSelectTestAccount?: (uid: string) => void;
 }
 
 export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
@@ -76,6 +77,7 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
   onUpdateIncident,
   onSignInGoogle,
   onReturnHome,
+  onSelectTestAccount,
 }) => {
   const [adminSubTab, setAdminSubTab] = useState<
     'dispatch' | 'verification' | 'pricing_areas' | 'incidents'
@@ -148,6 +150,15 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
                 className="px-4 py-2.5 bg-[#1C1917] text-white text-xs font-semibold rounded-lg hover:bg-[#292524]"
               >
                 Return to My Authorized Workspace
+              </button>
+            )}
+            {onSelectTestAccount && (
+              <button
+                type="button"
+                onClick={() => onSelectTestAccount('test_admin_deepak')}
+                className="px-4 py-2.5 bg-[#FAF8F5] text-[#1C1917] border border-[#D6D0C4] text-xs font-semibold rounded-lg hover:bg-[#F3EFEA]"
+              >
+                Use Test Admin Account (Deepak Sharma)
               </button>
             )}
           </div>

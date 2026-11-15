@@ -8,8 +8,13 @@ import {
   DEFAULT_SYSTEM_CONFIG,
   evaluateEmailNotificationBoundary,
   executeDatabaseBackedBookingCreate,
+  findBookingsReadyForAutomaticArrival,
   generateBookingReference,
+  INITIAL_HELPER_AVAILABILITIES,
+  INITIAL_VERIFIED_HELPERS,
+  isBookingScheduledArrivalReached,
   maskPiiEmail,
+  parseBookingScheduledStartMs,
   redactBookingForRole,
   selectAvailableHelperForBooking,
   validateBookingCreationInput,
@@ -682,7 +687,7 @@ test('13. Immediate helper availability & auto-assignment upon booking creation'
 
   assert.ok(immediateMatch.matchedHelper);
   assert.equal(immediateMatch.matchedHelper.helperId, 'helper_kavitha');
-  assert.equal(immediateMatch.initialStatus, 'assigned');
+  assert.equal(immediateMatch.initialStatus, 'accepted');
   assert.equal(immediateMatch.evaluations.length, 1);
 
   // If the helper already has an overlapping booking on 2026-10-28 from 10:00 for 2h,
@@ -691,7 +696,7 @@ test('13. Immediate helper availability & auto-assignment upon booking creation'
     ...sampleBooking,
     bookingId: 'booking_conflict_1',
     bookingRef: 'SC-BLR-20261028-CONF',
-    status: 'assigned',
+    status: 'accepted',
     assignedHelperUid: 'helper_kavitha',
     date: '2026-10-28',
     startTime: '10:00',
@@ -714,7 +719,7 @@ test('13. Immediate helper availability & auto-assignment upon booking creation'
   assert.equal(conflictResult.evaluations.length, 1);
   assert.match(conflictResult.evaluations[0].unavailableSummary || '', /SC-BLR-20261028-CONF/);
 
-  // Verify executeDatabaseBackedBookingCreate supports immediate assignment when an available helper is found
+  // Verify executeDatabaseBackedBookingCreate immediately confirms ('accepted') when an available helper is found
   const autoAssignedResult = await executeDatabaseBackedBookingCreate(
     {
       actorUid: 'senior_rameshwar',
@@ -740,8 +745,224 @@ test('13. Immediate helper availability & auto-assignment upon booking creation'
     }
   );
 
-  assert.equal(autoAssignedResult.bookingRecord.status, 'assigned');
+  assert.equal(autoAssignedResult.bookingRecord.status, 'accepted');
   assert.equal(autoAssignedResult.bookingRecord.assignedHelperUid, 'helper_kavitha');
   assert.equal(autoAssignedResult.bookingRecord.assignedHelperName, 'Kavitha Murthy');
-  assert.equal(autoAssignedResult.initialEvent.toStatus, 'assigned');
+  assert.equal(autoAssignedResult.initialEvent.toStatus, 'accepted');
 });
+
+test('14. Customer controls for Visit In Progress and Visit Completed: permits senior or booking family member and blocks unrelated users', () => {
+  const familyBookedArrived: BookingRecord = {
+    ...sampleBooking,
+    bookingId: 'booking_cust_1',
+    seniorId: 'senior_rameshwar',
+    bookedByUid: 'family_ananya',
+    bookedByName: 'Ananya Rao',
+    bookedByRole: 'family_member',
+    status: 'arrived',
+    assignedHelperUid: 'helper_kavitha',
+    assignedHelperName: 'Kavitha Murthy',
+  };
+
+  // Family member who booked can start the visit (arrived -> in_progress)
+  const familyStart = validateBookingTransition({
+    booking: familyBookedArrived,
+    toStatus: 'in_progress',
+    actorUid: 'family_ananya',
+    actorRole: 'family_member',
+  });
+  assert.equal(familyStart.valid, true);
+
+  // Senior on the booking can start the visit (arrived -> in_progress)
+  const seniorStart = validateBookingTransition({
+    booking: familyBookedArrived,
+    toStatus: 'in_progress',
+    actorUid: 'senior_rameshwar',
+    actorRole: 'senior',
+  });
+  assert.equal(seniorStart.valid, true);
+
+  // Unrelated family member cannot start someone else's visit
+  const unrelatedStart = validateBookingTransition({
+    booking: familyBookedArrived,
+    toStatus: 'in_progress',
+    actorUid: 'family_unrelated',
+    actorRole: 'family_member',
+  });
+  assert.equal(unrelatedStart.valid, false);
+
+  const familyBookedInProgress: BookingRecord = {
+    ...familyBookedArrived,
+    status: 'in_progress',
+  };
+
+  // Family member who booked can mark the visit completed (in_progress -> completed)
+  const familyComplete = validateBookingTransition({
+    booking: familyBookedInProgress,
+    toStatus: 'completed',
+    actorUid: 'family_ananya',
+    actorRole: 'family_member',
+  });
+  assert.equal(familyComplete.valid, true);
+
+  // Unrelated user cannot complete someone else's visit
+  const unrelatedComplete = validateBookingTransition({
+    booking: familyBookedInProgress,
+    toStatus: 'completed',
+    actorUid: 'family_unrelated',
+    actorRole: 'family_member',
+  });
+  assert.equal(unrelatedComplete.valid, false);
+});
+
+test('15. Scheduled automatic arrival at pickup: transitions accepted bookings at or after scheduled local start time', () => {
+  const scheduledStartMs = parseBookingScheduledStartMs('2026-11-14', '10:30');
+  assert.ok(typeof scheduledStartMs === 'number');
+  assert.equal(parseBookingScheduledStartMs('2026-02-31', '10:30'), null);
+
+  const acceptedDue: BookingRecord = {
+    ...sampleBooking,
+    bookingId: 'booking_due_now',
+    status: 'accepted',
+    assignedHelperUid: 'helper_kavitha',
+    date: '2026-11-14',
+    startTime: '10:30',
+  };
+  const acceptedFuture: BookingRecord = {
+    ...sampleBooking,
+    bookingId: 'booking_future',
+    status: 'accepted',
+    assignedHelperUid: 'helper_kavitha',
+    date: '2026-11-14',
+    startTime: '14:00',
+  };
+  const pendingDue: BookingRecord = {
+    ...sampleBooking,
+    bookingId: 'booking_pending_due',
+    status: 'pending_assignment',
+    assignedHelperUid: '',
+    date: '2026-11-14',
+    startTime: '09:00',
+  };
+  const alreadyArrived: BookingRecord = {
+    ...sampleBooking,
+    bookingId: 'booking_already_arrived',
+    status: 'arrived',
+    assignedHelperUid: 'helper_kavitha',
+    date: '2026-11-14',
+    startTime: '09:00',
+  };
+
+  const beforeTime = new Date(2026, 10, 14, 10, 29, 0, 0);
+  const exactTime = new Date(2026, 10, 14, 10, 30, 0, 0);
+  const laterTime = new Date(2026, 10, 14, 11, 0, 0, 0);
+
+  assert.equal(isBookingScheduledArrivalReached(acceptedDue, beforeTime), false);
+  assert.equal(isBookingScheduledArrivalReached(acceptedDue, exactTime), true);
+  assert.equal(isBookingScheduledArrivalReached(acceptedDue, laterTime), true);
+  assert.equal(isBookingScheduledArrivalReached(pendingDue, laterTime), false);
+  assert.equal(isBookingScheduledArrivalReached(alreadyArrived, laterTime), false);
+
+  const ready = findBookingsReadyForAutomaticArrival(
+    [acceptedDue, acceptedFuture, pendingDue, alreadyArrived],
+    exactTime
+  );
+  assert.deepEqual(
+    ready.map((b) => b.bookingId),
+    ['booking_due_now']
+  );
+});
+
+test('16. 24/7 helper pool coverage: 7 verified helpers cover all localities, overnight shifts, and cross-midnight conflicts', () => {
+  assert.equal(INITIAL_VERIFIED_HELPERS.length, 7);
+  assert.equal(INITIAL_HELPER_AVAILABILITIES.length, 7);
+
+  const nowIso = '2026-11-15T00:00:00.000Z';
+  const allHelpers: HelperProfile[] = INITIAL_VERIFIED_HELPERS.map((h) => ({
+    ...h,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  }));
+  const allAvailabilities: HelperAvailability[] = INITIAL_HELPER_AVAILABILITIES.map((a) => ({
+    ...a,
+    updatedAt: nowIso,
+  }));
+
+  // 24/7 booking creation accepts late-night and pre-dawn start times
+  for (const startTime of ['00:00', '02:30', '05:30', '09:30', '14:00', '21:30', '23:30']) {
+    const validation = validateBookingCreationInput({
+      actorUid: 'family_ananya',
+      actorName: 'Ananya Rao',
+      actorRole: 'family_member',
+      seniorProfile: sampleSenior,
+      familyLink: activeFamilyLink,
+      serviceType: 'hospital_accompaniment',
+      date: '2026-11-22', // Sunday
+      startTime,
+      durationHours: 4,
+      locality: 'Whitefield',
+      pickupAddress: sampleSenior.address,
+      destination: 'Manipal Hospital Whitefield',
+      taskNotes: '24/7 hospital accompaniment check',
+      locationConsentGranted: true,
+      nonMedicalAcknowledged: true,
+      clientSuppliedTotalInr: 1050,
+    });
+    assert.equal(validation.valid, true, `Expected ${startTime} to pass booking creation validation`);
+
+    const match = selectAvailableHelperForBooking({
+      serviceType: 'hospital_accompaniment',
+      locality: 'Whitefield',
+      date: '2026-11-22',
+      startTime,
+      durationHours: 4,
+      helpers: allHelpers,
+      availabilities: allAvailabilities,
+      existingBookings: [],
+    });
+    assert.ok(match.matchedHelper, `Expected an available helper on Sunday at ${startTime}`);
+    assert.equal(match.initialStatus, 'accepted');
+  }
+
+  // Overnight shift helper (20:00-08:00) covers 22:00 (4h) and 04:00 (2h), excludes 12:00 (2h)
+  const nightAvail = allAvailabilities.find((a) => a.helperId === 'helper_karthik')!;
+  assert.equal(checkHelperAvailabilityWindow('2026-11-18', '22:00', 4, nightAvail).available, true);
+  assert.equal(checkHelperAvailabilityWindow('2026-11-19', '04:00', 2, nightAvail).available, true);
+  assert.equal(checkHelperAvailabilityWindow('2026-11-19', '12:00', 2, nightAvail).available, false);
+
+  // Cross-midnight conflict: booking on 2026-11-18 22:00 for 4h (ends 02:00 on 2026-11-19)
+  // conflicts with 2026-11-19 01:00 for 2h for helper_anita, so pool automatically picks next available 24/7 helper
+  const anitaOvernightBooking: BookingRecord = {
+    ...sampleBooking,
+    bookingId: 'booking_overnight_anita',
+    bookingRef: 'SC-BLR-20261118-N101',
+    status: 'accepted',
+    assignedHelperUid: 'helper_anita',
+    date: '2026-11-18',
+    startTime: '22:00',
+    durationHours: 4,
+  };
+  const crossMidnightConflict = checkHelperScheduleConflict(
+    'helper_anita',
+    '2026-11-19',
+    '01:00',
+    2,
+    [anitaOvernightBooking]
+  );
+  assert.equal(crossMidnightConflict.hasConflict, true);
+
+  const fallbackMatch = selectAvailableHelperForBooking({
+    serviceType: 'hospital_accompaniment',
+    locality: 'Indiranagar',
+    date: '2026-11-19',
+    startTime: '01:00',
+    durationHours: 2,
+    helpers: allHelpers,
+    availabilities: allAvailabilities,
+    existingBookings: [anitaOvernightBooking],
+  });
+  assert.ok(fallbackMatch.matchedHelper);
+  assert.notEqual(fallbackMatch.matchedHelper.helperId, 'helper_anita');
+  assert.equal(fallbackMatch.initialStatus, 'accepted');
+});
+

@@ -230,6 +230,18 @@ export interface ConflictCheckResult {
   reason?: string;
 }
 
+export function shiftDateString(dateStr: string, deltaDays: number): string {
+  const parts = dateStr.split('-').map(Number);
+  if (parts.length !== 3 || parts.some((n) => Number.isNaN(n))) {
+    throw new Error(`Invalid date string: ${dateStr}`);
+  }
+  const utcDate = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + deltaDays));
+  const y = utcDate.getUTCFullYear();
+  const m = String(utcDate.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(utcDate.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 export function checkHelperScheduleConflict(
   helperUid: string,
   targetDate: string,
@@ -240,6 +252,8 @@ export function checkHelperScheduleConflict(
 ): ConflictCheckResult {
   const targetStart = parseTimeToMinutes(targetStartTime);
   const targetEnd = targetStart + targetDurationHours * 60;
+  const prevDate = shiftDateString(targetDate, -1);
+  const nextDate = shiftDateString(targetDate, 1);
 
   const activeStatuses: BookingStatus[] = ['assigned', 'accepted', 'arrived', 'in_progress'];
 
@@ -250,9 +264,6 @@ export function checkHelperScheduleConflict(
     if (booking.assignedHelperUid !== helperUid) {
       continue;
     }
-    if (booking.date !== targetDate) {
-      continue;
-    }
     if (!activeStatuses.includes(booking.status)) {
       continue;
     }
@@ -260,13 +271,35 @@ export function checkHelperScheduleConflict(
     const existingStart = parseTimeToMinutes(booking.startTime);
     const existingEnd = existingStart + booking.durationHours * 60;
 
-    // Two intervals [A, B) and [C, D) overlap iff A < D && C < B
-    if (targetStart < existingEnd && existingStart < targetEnd) {
-      return {
-        hasConflict: true,
-        conflictingBookingRef: booking.bookingRef,
-        reason: `Schedule conflict with booking ${booking.bookingRef} (${booking.startTime} for ${booking.durationHours}h on ${booking.date}).`,
-      };
+    if (booking.date === targetDate) {
+      // Two intervals [A, B) and [C, D) overlap iff A < D && C < B
+      if (targetStart < existingEnd && existingStart < targetEnd) {
+        return {
+          hasConflict: true,
+          conflictingBookingRef: booking.bookingRef,
+          reason: `Schedule conflict with booking ${booking.bookingRef} (${booking.startTime} for ${booking.durationHours}h on ${booking.date}).`,
+        };
+      }
+    } else if (booking.date === prevDate && existingEnd > 24 * 60) {
+      // Previous day's late booking crosses midnight into targetDate [0, existingEnd - 1440)
+      const spilloverEnd = existingEnd - 24 * 60;
+      if (targetStart < spilloverEnd) {
+        return {
+          hasConflict: true,
+          conflictingBookingRef: booking.bookingRef,
+          reason: `Schedule conflict with overnight booking ${booking.bookingRef} (${booking.startTime} for ${booking.durationHours}h on ${booking.date}).`,
+        };
+      }
+    } else if (booking.date === nextDate && targetEnd > 24 * 60) {
+      // Target booking crosses midnight into nextDate [0, targetEnd - 1440)
+      const targetSpilloverEnd = targetEnd - 24 * 60;
+      if (existingStart < targetSpilloverEnd) {
+        return {
+          hasConflict: true,
+          conflictingBookingRef: booking.bookingRef,
+          reason: `Schedule conflict with booking ${booking.bookingRef} (${booking.startTime} for ${booking.durationHours}h on ${booking.date}).`,
+        };
+      }
     }
   }
 
@@ -293,16 +326,60 @@ export function checkHelperAvailabilityWindow(
     return { available: true };
   }
   const dayCode = getWeekdayCode(targetDate);
+  const prevDayCode = getWeekdayCode(shiftDateString(targetDate, -1));
+  const nextDayCode = getWeekdayCode(shiftDateString(targetDate, 1));
+  const visitStart = parseTimeToMinutes(targetStartTime);
+  const visitEnd = visitStart + targetDurationHours * 60;
+  const shiftStart = parseTimeToMinutes(availability.startHour);
+  const shiftEnd = parseTimeToMinutes(availability.endHour);
+
+  // Full 24-hour window (00:00–23:59) supports round-the-clock visits including cross-midnight visits
+  if (shiftStart === 0 && shiftEnd >= 23 * 60 + 59) {
+    if (!availability.availableDays.includes(dayCode)) {
+      return {
+        available: false,
+        reason: `Helper is not scheduled to work on ${dayCode} (available days: ${availability.availableDays.join(', ')}).`,
+      };
+    }
+    if (visitEnd > 24 * 60 && !availability.availableDays.includes(nextDayCode)) {
+      return {
+        available: false,
+        reason: `Visit crosses midnight into ${nextDayCode}, when helper is not scheduled to work.`,
+      };
+    }
+    return { available: true };
+  }
+
+  // Overnight shift (e.g., 20:00–08:00 where shiftStart > shiftEnd)
+  if (shiftStart > shiftEnd) {
+    const fitsPreviousNightTail =
+      visitEnd <= shiftEnd && availability.availableDays.includes(prevDayCode);
+    const fitsCurrentNightShift =
+      visitStart >= shiftStart &&
+      visitEnd <= shiftEnd + 24 * 60 &&
+      availability.availableDays.includes(dayCode);
+    if (fitsPreviousNightTail || fitsCurrentNightShift) {
+      return { available: true };
+    }
+    if (!availability.availableDays.includes(dayCode) && !availability.availableDays.includes(prevDayCode)) {
+      return {
+        available: false,
+        reason: `Helper is not scheduled to work on ${dayCode} (available days: ${availability.availableDays.join(', ')}).`,
+      };
+    }
+    return {
+      available: false,
+      reason: `Visit window (${targetStartTime} for ${targetDurationHours}h) falls outside helper shift hours (${availability.startHour}–${availability.endHour}).`,
+    };
+  }
+
+  // Standard daytime shift (shiftStart <= shiftEnd)
   if (!availability.availableDays.includes(dayCode)) {
     return {
       available: false,
       reason: `Helper is not scheduled to work on ${dayCode} (available days: ${availability.availableDays.join(', ')}).`,
     };
   }
-  const visitStart = parseTimeToMinutes(targetStartTime);
-  const visitEnd = visitStart + targetDurationHours * 60;
-  const shiftStart = parseTimeToMinutes(availability.startHour);
-  const shiftEnd = parseTimeToMinutes(availability.endHour);
 
   if (visitStart < shiftStart || visitEnd > shiftEnd) {
     return {
@@ -411,13 +488,7 @@ export function validateBookingCreationInput(input: ValidateBookingCreateInput):
   }
 
   try {
-    const minutes = parseTimeToMinutes(input.startTime);
-    if (minutes < 6 * 60 || minutes > 20 * 60) {
-      return {
-        valid: false,
-        error: 'Visit start time must be within standard companion hours (06:00 to 20:00).',
-      };
-    }
+    parseTimeToMinutes(input.startTime);
   } catch (err) {
     return { valid: false, error: err instanceof Error ? err.message : 'Invalid start time.' };
   }
@@ -592,7 +663,10 @@ export function validateBookingTransition(input: TransitionValidationInput): {
     };
   }
 
-  // 2. Helper Acceptance: assigned -> accepted (Assigned Helper or Coordinator Admin)
+  const isCustomerParticipant =
+    booking.seniorId === actorUid || booking.bookedByUid === actorUid;
+
+  // 2. Helper Acceptance: assigned -> accepted (Assigned Helper, Customer Participant, or Coordinator Admin)
   if (toStatus === 'accepted') {
     if (fromStatus !== 'assigned') {
       return {
@@ -600,10 +674,10 @@ export function validateBookingTransition(input: TransitionValidationInput): {
         error: `Booking must be in "assigned" state before acceptance (current: "${fromStatus}").`,
       };
     }
-    if (booking.assignedHelperUid !== actorUid && actorRole !== 'admin') {
+    if (booking.assignedHelperUid !== actorUid && !isCustomerParticipant && actorRole !== 'admin') {
       return {
         valid: false,
-        error: 'Only the assigned helper can accept and confirm this booking assignment.',
+        error: 'Only the assigned helper or booking participant can confirm this booking assignment.',
       };
     }
     return {
@@ -612,7 +686,7 @@ export function validateBookingTransition(input: TransitionValidationInput): {
     };
   }
 
-  // 3. Helper Arrived: accepted -> arrived (Assigned Helper only)
+  // 3. Helper Arrived: accepted -> arrived (Assigned Helper, Scheduled Auto-Arrival by Customer Participant, or Admin)
   if (toStatus === 'arrived') {
     if (fromStatus !== 'accepted') {
       return {
@@ -620,10 +694,10 @@ export function validateBookingTransition(input: TransitionValidationInput): {
         error: `Booking must be "accepted" before marking arrival (current: "${fromStatus}").`,
       };
     }
-    if (booking.assignedHelperUid !== actorUid && actorRole !== 'admin') {
+    if (booking.assignedHelperUid !== actorUid && !isCustomerParticipant && actorRole !== 'admin') {
       return {
         valid: false,
-        error: 'Only the assigned helper can mark arrival at the pickup address.',
+        error: 'Only the assigned helper or booking participant can mark arrival at the pickup address.',
       };
     }
     return {
@@ -632,7 +706,7 @@ export function validateBookingTransition(input: TransitionValidationInput): {
     };
   }
 
-  // 4. Visit In Progress: arrived -> in_progress (Assigned Helper only)
+  // 4. Visit In Progress: arrived -> in_progress (Customer Participant, Assigned Helper, or Admin)
   if (toStatus === 'in_progress') {
     if (fromStatus !== 'arrived') {
       return {
@@ -640,10 +714,10 @@ export function validateBookingTransition(input: TransitionValidationInput): {
         error: `Helper must mark "arrived" before starting the visit (current: "${fromStatus}").`,
       };
     }
-    if (booking.assignedHelperUid !== actorUid && actorRole !== 'admin') {
+    if (!isCustomerParticipant && booking.assignedHelperUid !== actorUid && actorRole !== 'admin') {
       return {
         valid: false,
-        error: 'Only the assigned helper can transition the visit to in_progress.',
+        error: 'Only the customer participant, assigned helper, or administrator can transition the visit to in_progress.',
       };
     }
     return {
@@ -652,7 +726,7 @@ export function validateBookingTransition(input: TransitionValidationInput): {
     };
   }
 
-  // 5. Visit Completed: in_progress -> completed (Assigned Helper only)
+  // 5. Visit Completed: in_progress -> completed (Customer Participant, Assigned Helper, or Admin)
   if (toStatus === 'completed') {
     if (fromStatus !== 'in_progress') {
       return {
@@ -660,10 +734,10 @@ export function validateBookingTransition(input: TransitionValidationInput): {
         error: `Visit must be "in_progress" before marking completed (current: "${fromStatus}").`,
       };
     }
-    if (booking.assignedHelperUid !== actorUid && actorRole !== 'admin') {
+    if (!isCustomerParticipant && booking.assignedHelperUid !== actorUid && actorRole !== 'admin') {
       return {
         valid: false,
-        error: 'Only the assigned helper can mark the visit completed.',
+        error: 'Only the customer participant, assigned helper, or administrator can mark the visit completed.',
       };
     }
     return {
@@ -850,7 +924,7 @@ export async function executeDatabaseBackedBookingCreate(
       : null;
 
   const matchedHelper = selection?.matchedHelper || null;
-  const initialStatus = matchedHelper ? 'assigned' : 'pending_assignment';
+  const initialStatus = matchedHelper ? 'accepted' : 'pending_assignment';
 
   const bookingRecord: BookingRecord = {
     bookingId,
@@ -1039,7 +1113,7 @@ export interface HelperAvailabilityEvaluation {
 
 export interface AutomaticHelperSelectionResult {
   matchedHelper: HelperProfile | null;
-  initialStatus: 'assigned' | 'pending_assignment';
+  initialStatus: 'accepted' | 'pending_assignment';
   evaluations: HelperAvailabilityEvaluation[];
   assignmentNote: string;
 }
@@ -1084,8 +1158,12 @@ export function selectAvailableHelperForBooking(params: {
     const availRecord =
       availabilities.find((a) => a.helperId === helper.helperId) || null;
     const shiftWindowLabel = availRecord
-      ? `${availRecord.availableDays.join(', ')} · ${availRecord.startHour}–${availRecord.endHour}`
-      : 'All days · 06:00–20:00';
+      ? availRecord.startHour === '00:00' &&
+        availRecord.endHour === '23:59' &&
+        availRecord.availableDays.length === 7
+        ? '24/7 (All days · 00:00–23:59)'
+        : `${availRecord.availableDays.join(', ')} · ${availRecord.startHour}–${availRecord.endHour}`
+      : '24/7 (All days · 00:00–23:59)';
 
     let withinShiftWindow = true;
     let shiftReason: string | undefined;
@@ -1164,9 +1242,9 @@ export function selectAvailableHelperForBooking(params: {
     const matchedEval = availableCandidates[0];
     return {
       matchedHelper,
-      initialStatus: 'assigned',
+      initialStatus: 'accepted',
       evaluations,
-      assignmentNote: `Verified companion helper ${matchedHelper.fullName} (${matchedHelper.phone}) was automatically assigned after passing locality (${locality}), shift-window (${matchedEval.shiftWindowLabel}), and schedule-conflict checks. Awaiting helper acceptance.`,
+      assignmentNote: `Verified companion helper ${matchedHelper.fullName} (${matchedHelper.phone}) was assigned and immediately confirmed after passing locality (${locality}), shift-window (${matchedEval.shiftWindowLabel}), and schedule-conflict checks.`,
     };
   }
 
@@ -1225,6 +1303,8 @@ export const INITIAL_VERIFIED_HELPERS: Omit<HelperProfile, 'createdAt' | 'update
       'HSR Layout',
       'Indiranagar',
       'Malleshwaram',
+      'Sadashivanagar',
+      'Whitefield',
     ],
     servicesOffered: [
       'hospital_accompaniment',
@@ -1242,6 +1322,166 @@ export const INITIAL_VERIFIED_HELPERS: Omit<HelperProfile, 'createdAt' | 'update
     isActive: true,
     completedBookingsCount: 12,
   },
+  {
+    helperId: 'helper_anita',
+    fullName: 'Anita Deshpande',
+    phone: '+91-98803-41209',
+    bio: '7 years of 24/7 rotational senior accompaniment for early-morning diagnostics, late-evening hospital discharges, and urgent outpatient visits across Bengaluru.',
+    languages: ['Kannada', 'English', 'Hindi', 'Marathi'],
+    serviceAreas: [
+      'Indiranagar',
+      'Jayanagar',
+      'Koramangala',
+      'Malleshwaram',
+      'JP Nagar',
+      'Sadashivanagar',
+      'HSR Layout',
+      'Whitefield',
+    ],
+    servicesOffered: [
+      'hospital_accompaniment',
+      'shopping_errands',
+      'companionship_visit',
+    ],
+    yearsExperience: 7,
+    verificationStatus: 'approved',
+    idCheckReviewed: true,
+    backgroundCheckReviewed: true,
+    referenceCheckReviewed: true,
+    trainingCompleted: true,
+    verificationNotes:
+      'All 4 verification checks completed; certified for 24/7 rotational senior companion dispatch in Bengaluru.',
+    isActive: true,
+    completedBookingsCount: 24,
+  },
+  {
+    helperId: 'helper_karthik',
+    fullName: 'Karthik Hegde',
+    phone: '+91-98804-57812',
+    bio: '5 years specializing in overnight hospital waiting-lounge support, late-night pharmacy errands, and 6 AM clinic check-ins across Bengaluru.',
+    languages: ['Kannada', 'English', 'Hindi', 'Tamil'],
+    serviceAreas: [
+      'Indiranagar',
+      'Jayanagar',
+      'Koramangala',
+      'Malleshwaram',
+      'JP Nagar',
+      'Sadashivanagar',
+      'HSR Layout',
+      'Whitefield',
+    ],
+    servicesOffered: [
+      'hospital_accompaniment',
+      'shopping_errands',
+      'companionship_visit',
+    ],
+    yearsExperience: 5,
+    verificationStatus: 'approved',
+    idCheckReviewed: true,
+    backgroundCheckReviewed: true,
+    referenceCheckReviewed: true,
+    trainingCompleted: true,
+    verificationNotes:
+      'All 4 verification checks completed; overnight and early-morning Bengaluru specialist.',
+    isActive: true,
+    completedBookingsCount: 15,
+  },
+  {
+    helperId: 'helper_deepa',
+    fullName: 'Deepa Venkatesh',
+    phone: '+91-98805-69340',
+    bio: '8 years supporting elderly parents with round-the-clock clinic accompaniment, diagnostic fasting visits, and calm home companionship.',
+    languages: ['Kannada', 'English', 'Telugu', 'Tamil'],
+    serviceAreas: [
+      'Indiranagar',
+      'Jayanagar',
+      'Koramangala',
+      'Malleshwaram',
+      'JP Nagar',
+      'Sadashivanagar',
+      'HSR Layout',
+      'Whitefield',
+    ],
+    servicesOffered: [
+      'hospital_accompaniment',
+      'shopping_errands',
+      'companionship_visit',
+    ],
+    yearsExperience: 8,
+    verificationStatus: 'approved',
+    idCheckReviewed: true,
+    backgroundCheckReviewed: true,
+    referenceCheckReviewed: true,
+    trainingCompleted: true,
+    verificationNotes:
+      'All 4 verification checks completed; verified 24/7 standby senior care companion.',
+    isActive: true,
+    completedBookingsCount: 29,
+  },
+  {
+    helperId: 'helper_manoj',
+    fullName: 'Manoj Kulkarni',
+    phone: '+91-98806-78451',
+    bio: '4 years providing evening and overnight non-medical accompaniment, cab coordination, and outpatient billing assistance in Bengaluru.',
+    languages: ['Kannada', 'English', 'Hindi'],
+    serviceAreas: [
+      'Indiranagar',
+      'Jayanagar',
+      'Koramangala',
+      'Malleshwaram',
+      'JP Nagar',
+      'Sadashivanagar',
+      'HSR Layout',
+      'Whitefield',
+    ],
+    servicesOffered: [
+      'hospital_accompaniment',
+      'shopping_errands',
+      'companionship_visit',
+    ],
+    yearsExperience: 4,
+    verificationStatus: 'approved',
+    idCheckReviewed: true,
+    backgroundCheckReviewed: true,
+    referenceCheckReviewed: true,
+    trainingCompleted: true,
+    verificationNotes:
+      'All 4 verification checks completed; evening and night shift verified companion.',
+    isActive: true,
+    completedBookingsCount: 11,
+  },
+  {
+    helperId: 'helper_revathi',
+    fullName: 'Revathi Krishnan',
+    phone: '+91-98807-82910',
+    bio: '6 years of unhurried 24/7 companion coverage for hospital OPDs, specialty eye and dental visits, and neighbourhood errands across Bengaluru.',
+    languages: ['Tamil', 'Kannada', 'English', 'Malayalam'],
+    serviceAreas: [
+      'Indiranagar',
+      'Jayanagar',
+      'Koramangala',
+      'Malleshwaram',
+      'JP Nagar',
+      'Sadashivanagar',
+      'HSR Layout',
+      'Whitefield',
+    ],
+    servicesOffered: [
+      'hospital_accompaniment',
+      'shopping_errands',
+      'companionship_visit',
+    ],
+    yearsExperience: 6,
+    verificationStatus: 'approved',
+    idCheckReviewed: true,
+    backgroundCheckReviewed: true,
+    referenceCheckReviewed: true,
+    trainingCompleted: true,
+    verificationNotes:
+      'All 4 verification checks completed; approved for 24/7 on-call companion coverage.',
+    isActive: true,
+    completedBookingsCount: 21,
+  },
 ];
 
 export const INITIAL_HELPER_AVAILABILITIES: Omit<HelperAvailability, 'updatedAt'>[] = [
@@ -1255,10 +1495,83 @@ export const INITIAL_HELPER_AVAILABILITIES: Omit<HelperAvailability, 'updatedAt'
   {
     availabilityId: 'helper_suresh',
     helperId: 'helper_suresh',
-    availableDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+    availableDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
     startHour: '08:00',
-    endHour: '19:00',
+    endHour: '21:00',
+  },
+  {
+    availabilityId: 'helper_anita',
+    helperId: 'helper_anita',
+    availableDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    startHour: '00:00',
+    endHour: '23:59',
+  },
+  {
+    availabilityId: 'helper_karthik',
+    helperId: 'helper_karthik',
+    availableDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    startHour: '20:00',
+    endHour: '08:00',
+  },
+  {
+    availabilityId: 'helper_deepa',
+    helperId: 'helper_deepa',
+    availableDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    startHour: '00:00',
+    endHour: '23:59',
+  },
+  {
+    availabilityId: 'helper_manoj',
+    helperId: 'helper_manoj',
+    availableDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    startHour: '18:00',
+    endHour: '08:00',
+  },
+  {
+    availabilityId: 'helper_revathi',
+    helperId: 'helper_revathi',
+    availableDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    startHour: '00:00',
+    endHour: '23:59',
   },
 ];
 
+export function parseBookingScheduledStartMs(date: string, startTime: string): number | null {
+  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date) || !/^[0-9]{2}:[0-9]{2}$/.test(startTime)) {
+    return null;
+  }
+  const [year, month, day] = date.split('-').map(Number);
+  const [hour, minute] = startTime.split(':').map(Number);
+  const d = new Date(year, month - 1, day, hour, minute, 0, 0);
+  if (
+    Number.isNaN(d.getTime()) ||
+    d.getFullYear() !== year ||
+    d.getMonth() !== month - 1 ||
+    d.getDate() !== day
+  ) {
+    return null;
+  }
+  return d.getTime();
+}
+
+export function isBookingScheduledArrivalReached(
+  booking: Pick<BookingRecord, 'status' | 'assignedHelperUid' | 'date' | 'startTime'>,
+  now: Date = new Date()
+): boolean {
+  if (booking.status !== 'accepted' || !booking.assignedHelperUid) {
+    return false;
+  }
+  const scheduledMs = parseBookingScheduledStartMs(booking.date, booking.startTime);
+  if (scheduledMs === null) {
+    return false;
+  }
+  return now.getTime() >= scheduledMs;
+}
+
+export function findBookingsReadyForAutomaticArrival(
+  bookings: BookingRecord[],
+  now: Date = new Date()
+): BookingRecord[] {
+  return bookings.filter((b) => isBookingScheduledArrivalReached(b, now));
+}
 
