@@ -298,77 +298,146 @@ async function startServer() {
       ['src/utils/testAccounts.test.ts', 'ts'],
     ];
 
-    const crc32 = (buf: Buffer): number => {
-      let crc = 0xffffffff;
-      for (let i = 0; i < buf.length; i += 1) {
-        crc ^= buf[i];
-        for (let j = 0; j < 8; j += 1) {
-          crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-        }
-      }
-      return (crc ^ 0xffffffff) >>> 0;
+    const sanitizePdfAscii = (input: string): string => {
+      return input
+        .replace(/\t/g, '  ')
+        .replace(/\u20B9/g, 'INR ')
+        .replace(/[\u2013\u2014]/g, '-')
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/[\u201C\u201D]/g, '"')
+        .replace(/\u2192/g, '->')
+        .replace(/\u00B7|\u2022/g, '*')
+        .replace(/[^\x20-\x7E]/g, ' ');
     };
 
-    const buildZipBuffer = (entries: Array<{ name: string; data: Buffer }>): Buffer => {
-      const localChunks: Buffer[] = [];
-      const centralChunks: Buffer[] = [];
-      let offset = 0;
+    const escapePdfString = (text: string): string =>
+      text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
 
-      for (const entry of entries) {
-        const nameBuf = Buffer.from(entry.name, 'utf8');
-        const compressed = zlib.deflateRawSync(entry.data);
-        const crc = crc32(entry.data);
+    const wrapLine = (line: string, maxCols = 98): string[] => {
+      const clean = sanitizePdfAscii(line);
+      if (clean.length <= maxCols) return [clean];
+      const out: string[] = [];
+      for (let i = 0; i < clean.length; i += maxCols) {
+        out.push(clean.slice(i, i + maxCols));
+      }
+      return out;
+    };
 
-        const localHeader = Buffer.alloc(30);
-        localHeader.writeUInt32LE(0x04034b50, 0);
-        localHeader.writeUInt16LE(20, 4);
-        localHeader.writeUInt16LE(0x0800, 6);
-        localHeader.writeUInt16LE(8, 8);
-        localHeader.writeUInt16LE(0, 10);
-        localHeader.writeUInt16LE(0, 12);
-        localHeader.writeUInt32LE(crc, 14);
-        localHeader.writeUInt32LE(compressed.length, 18);
-        localHeader.writeUInt32LE(entry.data.length, 22);
-        localHeader.writeUInt16LE(nameBuf.length, 26);
-        localHeader.writeUInt16LE(0, 28);
+    const buildPdfBuffer = (): Buffer => {
+      const lines: Array<{ text: string; isHeader?: boolean }> = [];
+      const addWrapped = (raw: string, isHeader = false) => {
+        for (const l of wrapLine(raw, isHeader ? 82 : 98)) {
+          lines.push({ text: l, isHeader });
+        }
+      };
 
-        localChunks.push(localHeader, nameBuf, compressed);
+      addWrapped('SAATHICARE (BENGALURU) - COMPLETE PRODUCT CODEBASE', true);
+      addWrapped('Non-Medical Senior Companion Booking Platform | Full-Stack Source Code', false);
+      addWrapped('Stack: React 19, TypeScript, Vite, Tailwind CSS, Express, Firebase Auth, Cloud Firestore', false);
+      addWrapped('Includes 24/7 verified Bengaluru helper matching, consent workflow, and security rules.', false);
+      addWrapped('--------------------------------------------------------------------------------------------------', false);
+      addWrapped('TABLE OF CONTENTS (32 FILES):', true);
+      EXPORTABLE_FILES.forEach(([rel], idx) => {
+        addWrapped(`${String(idx + 1).padStart(2, '0')}. ${rel}`, false);
+      });
 
-        const centralHeader = Buffer.alloc(46);
-        centralHeader.writeUInt32LE(0x02014b50, 0);
-        centralHeader.writeUInt16LE(20, 4);
-        centralHeader.writeUInt16LE(20, 6);
-        centralHeader.writeUInt16LE(0x0800, 8);
-        centralHeader.writeUInt16LE(8, 10);
-        centralHeader.writeUInt16LE(0, 12);
-        centralHeader.writeUInt16LE(0, 14);
-        centralHeader.writeUInt32LE(crc, 16);
-        centralHeader.writeUInt32LE(compressed.length, 20);
-        centralHeader.writeUInt32LE(entry.data.length, 24);
-        centralHeader.writeUInt16LE(nameBuf.length, 28);
-        centralHeader.writeUInt16LE(0, 30);
-        centralHeader.writeUInt16LE(0, 32);
-        centralHeader.writeUInt16LE(0, 34);
-        centralHeader.writeUInt16LE(0, 36);
-        centralHeader.writeUInt32LE(0, 38);
-        centralHeader.writeUInt32LE(offset, 42);
-
-        centralChunks.push(centralHeader, nameBuf);
-        offset += localHeader.length + nameBuf.length + compressed.length;
+      for (const [rel] of EXPORTABLE_FILES) {
+        lines.push({ text: '', isHeader: false });
+        addWrapped(`=== FILE: ${rel} ===`, true);
+        const rawContent = fs.readFileSync(path.resolve(process.cwd(), rel), 'utf8');
+        const fileLines = rawContent.split(/\r?\n/);
+        for (let i = 0; i < fileLines.length; i += 1) {
+          addWrapped(`${String(i + 1).padStart(4, ' ')} | ${fileLines[i]}`, false);
+        }
       }
 
-      const centralDir = Buffer.concat(centralChunks);
-      const endRecord = Buffer.alloc(22);
-      endRecord.writeUInt32LE(0x06054b50, 0);
-      endRecord.writeUInt16LE(0, 4);
-      endRecord.writeUInt16LE(0, 6);
-      endRecord.writeUInt16LE(entries.length, 8);
-      endRecord.writeUInt16LE(entries.length, 10);
-      endRecord.writeUInt32LE(centralDir.length, 12);
-      endRecord.writeUInt32LE(offset, 16);
-      endRecord.writeUInt16LE(0, 20);
+      const linesPerPage = 66;
+      const pages: Array<Array<{ text: string; isHeader?: boolean }>> = [];
+      for (let i = 0; i < lines.length; i += linesPerPage) {
+        pages.push(lines.slice(i, i + linesPerPage));
+      }
 
-      return Buffer.concat([...localChunks, centralDir, endRecord]);
+      // Objects: 1=Catalog, 2=Pages, 3=Font Courier, 4=Font Helvetica-Bold, then per page: (PageObj, ContentObj)
+      const objects: Buffer[] = [];
+      const pageObjIds: number[] = [];
+
+      // Placeholder slots 1..4 filled after knowing pageObjIds
+      objects.push(Buffer.alloc(0)); // 1
+      objects.push(Buffer.alloc(0)); // 2
+      objects.push(Buffer.from('3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>\nendobj\n', 'ascii'));
+      objects.push(Buffer.from('4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj\n', 'ascii'));
+
+      let nextId = 5;
+      for (let p = 0; p < pages.length; p += 1) {
+        const pageId = nextId++;
+        const contentId = nextId++;
+        pageObjIds.push(pageId);
+
+        const streamOps: string[] = [];
+        streamOps.push('BT');
+        streamOps.push('/F2 8 Tf');
+        streamOps.push('36 766 Td');
+        streamOps.push(`(SaathiCare Codebase | Page ${p + 1} of ${pages.length}) Tj`);
+        streamOps.push('ET');
+
+        let y = 748;
+        streamOps.push('BT');
+        for (const item of pages[p]) {
+          if (item.isHeader) {
+            streamOps.push(`/F2 8.5 Tf 1 0 0 1 36 ${y.toFixed(1)} Tm (${escapePdfString(item.text)}) Tj`);
+          } else {
+            streamOps.push(`/F1 7.6 Tf 1 0 0 1 36 ${y.toFixed(1)} Tm (${escapePdfString(item.text)}) Tj`);
+          }
+          y -= 10.7;
+        }
+        streamOps.push('ET');
+
+        const compressedStream = zlib.deflateSync(Buffer.from(streamOps.join('\n'), 'ascii'));
+        const contentHeader = Buffer.from(
+          `${contentId} 0 obj\n<< /Length ${compressedStream.length} /Filter /FlateDecode >>\nstream\n`,
+          'ascii'
+        );
+        const contentFooter = Buffer.from('\nendstream\nendobj\n', 'ascii');
+        const pageObj = Buffer.from(
+          `${pageId} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentId} 0 R >>\nendobj\n`,
+          'ascii'
+        );
+
+        objects.push(pageObj);
+        objects.push(Buffer.concat([contentHeader, compressedStream, contentFooter]));
+      }
+
+      objects[0] = Buffer.from('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n', 'ascii');
+      objects[1] = Buffer.from(
+        `2 0 obj\n<< /Type /Pages /Kids [${pageObjIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pageObjIds.length} >>\nendobj\n`,
+        'ascii'
+      );
+
+      const header = Buffer.from('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n', 'binary');
+      const parts: Buffer[] = [header];
+      const offsets: number[] = [0];
+      let cursor = header.length;
+
+      for (const objBuf of objects) {
+        offsets.push(cursor);
+        parts.push(objBuf);
+        cursor += objBuf.length;
+      }
+
+      const xrefOffset = cursor;
+      const xrefLines = [
+        `xref`,
+        `0 ${objects.length + 1}`,
+        '0000000000 65535 f ',
+        ...offsets.slice(1).map((off) => `${String(off).padStart(10, '0')} 00000 n `),
+        'trailer',
+        `<< /Size ${objects.length + 1} /Root 1 0 R >>`,
+        'startxref',
+        `${xrefOffset}`,
+        '%%EOF\n',
+      ];
+      parts.push(Buffer.from(xrefLines.join('\n'), 'ascii'));
+      return Buffer.concat(parts);
     };
 
     const buildMarkdownBundle = (): string => {
@@ -387,38 +456,84 @@ async function startServer() {
       return header + sections.join('');
     };
 
-    app.get('/api/dev/download-codebase.txt', (_req, res) => {
-      const content = buildMarkdownBundle();
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    app.get('/api/dev/saathicare-codebase.pdf', (req, res) => {
+      const pdfBuf = buildPdfBuffer();
+      const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+      res.setHeader('Content-Type', 'application/pdf');
       res.setHeader(
         'Content-Disposition',
-        'attachment; filename="saathicare_complete_codebase.txt"'
+        `${disposition}; filename="saathicare-codebase.pdf"`
       );
-      res.send(content);
+      res.send(pdfBuf);
     });
 
-    app.get('/api/dev/download-codebase.md', (_req, res) => {
-      const content = buildMarkdownBundle();
-      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-      res.setHeader(
-        'Content-Disposition',
-        'attachment; filename="saathicare_complete_codebase.md"'
-      );
-      res.send(content);
-    });
+    app.get('/api/dev/codebase', (_req, res) => {
+      const fullBundle = buildMarkdownBundle();
+      const escapeHtml = (s: string) =>
+        s
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      const fileCards = EXPORTABLE_FILES.map(([rel], idx) => {
+        const content = fs.readFileSync(path.resolve(process.cwd(), rel), 'utf8');
+        return `<section class="card">
+          <div class="card-head">
+            <strong>${idx + 1}. ${escapeHtml(rel)}</strong>
+            <button type="button" onclick="copyText('file-${idx}', this)">Copy File</button>
+          </div>
+          <pre id="file-${idx}">${escapeHtml(content)}</pre>
+        </section>`;
+      }).join('\n');
 
-    app.get('/api/dev/download-codebase.zip', (_req, res) => {
-      const entries = EXPORTABLE_FILES.map(([rel]) => ({
-        name: `saathicare/${rel}`,
-        data: fs.readFileSync(path.resolve(process.cwd(), rel)),
-      }));
-      const zipBuffer = buildZipBuffer(entries);
-      res.setHeader('Content-Type', 'application/zip');
-      res.setHeader(
-        'Content-Disposition',
-        'attachment; filename="saathicare_complete_codebase.zip"'
-      );
-      res.send(zipBuffer);
+      const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>SaathiCare — Complete Product Codebase</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #f8f7f4; color: #1c1917; }
+    header { position: sticky; top: 0; background: #1c1917; color: #fafaf9; padding: 14px 24px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; z-index: 10; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    button, a.btn { background: #10b981; color: #052e16; border: none; padding: 9px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; text-decoration: none; font-size: 13px; }
+    button.secondary, a.btn.secondary { background: #e7e5e4; color: #1c1917; }
+    main { max-width: 1100px; margin: 24px auto; padding: 0 20px 60px; }
+    .card { background: #fff; border: 1px solid #e7e5e4; border-radius: 10px; margin-bottom: 18px; overflow: hidden; }
+    .card-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: #f5f5f4; border-bottom: 1px solid #e7e5e4; }
+    pre { margin: 0; padding: 14px 16px; overflow-x: auto; font-size: 12px; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    @media print { header { display: none; } .card { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div style="font-weight:700;font-size:16px;">SaathiCare — Complete Codebase (32 Files)</div>
+      <div style="font-size:12px;color:#d6d3d1;">Copy directly into ChatGPT or open/save as PDF for deck generation</div>
+    </div>
+    <div class="actions">
+      <button type="button" onclick="copyText('full-bundle', this)">Copy All Code (32 Files)</button>
+      <a class="btn secondary" href="/api/dev/saathicare-codebase.pdf" target="_blank" rel="noopener">Open PDF Version</a>
+      <button type="button" class="secondary" onclick="window.print()">Print / Save as PDF</button>
+    </div>
+  </header>
+  <main>
+    <textarea id="full-bundle" style="position:fixed;left:-9999px;top:-9999px;">${escapeHtml(fullBundle)}</textarea>
+    ${fileCards}
+  </main>
+  <script>
+    function copyText(id, btn) {
+      var el = document.getElementById(id);
+      var text = el.value !== undefined ? el.value : el.textContent;
+      navigator.clipboard.writeText(text).then(function() {
+        var orig = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(function() { btn.textContent = orig; }, 1800);
+      });
+    }
+  </script>
+</body>
+</html>`;
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(html);
     });
 
     const vite = await createViteServer({
