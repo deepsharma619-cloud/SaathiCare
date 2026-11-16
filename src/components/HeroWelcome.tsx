@@ -16,7 +16,6 @@ import type {
   UserRole,
 } from '../types/domain';
 import { calculateBookingPrice, SERVICE_CATALOG } from '../utils/bookingRules';
-import { TEST_FAMILY_ACCOUNT } from '../utils/testAccounts';
 import { formatInr } from './StatusIndicator';
 
 interface HeroWelcomeProps {
@@ -29,10 +28,6 @@ interface HeroWelcomeProps {
     emailVerified: boolean;
   } | null;
   currentUser: UserProfile | null;
-  activeTestAccountUid?: string | null;
-  authBusy: boolean;
-  onSignInGoogle: () => void;
-  onSelectTestAccount?: (uid: string) => void;
   onRegisterUser: (payload: {
     fullName: string;
     phone: string;
@@ -46,7 +41,7 @@ interface HeroWelcomeProps {
     languages: string[];
   }) => Promise<void>;
   onStartBookingWithPreset: (serviceType: ServiceType, durationHours: DurationHours) => void;
-  onNavigateToRoleWorkspace: () => void;
+  onViewServices: () => void;
   authError: string | null;
 }
 
@@ -55,13 +50,9 @@ export const HeroWelcome: React.FC<HeroWelcomeProps> = ({
   systemConfig,
   firebaseAuthUser,
   currentUser,
-  activeTestAccountUid,
-  authBusy,
-  onSignInGoogle,
-  onSelectTestAccount,
   onRegisterUser,
   onStartBookingWithPreset,
-  onNavigateToRoleWorkspace,
+  onViewServices,
   authError,
 }) => {
   const [calcService, setCalcService] = useState<ServiceType>('hospital_accompaniment');
@@ -235,40 +226,12 @@ export const HeroWelcome: React.FC<HeroWelcomeProps> = ({
               <div className="flex flex-wrap items-center gap-4">
                 <button
                   type="button"
-                  onClick={() => onStartBookingWithPreset('hospital_accompaniment', 4)}
-                  className="inline-flex items-center gap-2 px-6 py-3.5 bg-[#9A3412] text-white text-base font-semibold rounded-lg hover:bg-[#7C2D12] transition-colors whitespace-nowrap"
+                  onClick={onViewServices}
+                  className="inline-flex items-center gap-2 px-6 py-3.5 bg-[#9A3412] text-white text-base font-semibold rounded-lg hover:bg-[#7C2D12] transition-colors whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
                 >
-                  <span>Request a Hospital Visit</span>
+                  <span>View Services &amp; Pricing</span>
                   <ArrowRight className="w-4 h-4" aria-hidden="true" />
                 </button>
-                {!currentUser ? (
-                  onSelectTestAccount ? (
-                    <button
-                      type="button"
-                      onClick={() => onSelectTestAccount(TEST_FAMILY_ACCOUNT.profile.uid)}
-                      className="inline-flex items-center justify-center gap-2 px-5 py-3.5 bg-[#FAF8F5] text-[#1C1917] border border-[#D6D0C4] text-sm sm:text-base font-semibold rounded-lg hover:bg-[#F3EFEA] transition-colors text-center sm:whitespace-nowrap max-w-full"
-                    >
-                      Continue as Family Member ({TEST_FAMILY_ACCOUNT.profile.fullName})
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={onSignInGoogle}
-                      disabled={authBusy}
-                      className="inline-flex items-center gap-2 px-5 py-3.5 bg-[#FAF8F5] text-[#1C1917] border border-[#D6D0C4] text-base font-semibold rounded-lg hover:bg-[#F3EFEA] transition-colors whitespace-nowrap disabled:opacity-50"
-                    >
-                      {authBusy ? 'Connecting to Google...' : 'Sign In with Google Account'}
-                    </button>
-                  )
-                ) : (
-                  <button
-                    type="button"
-                    onClick={onNavigateToRoleWorkspace}
-                    className="inline-flex items-center gap-2 px-5 py-3.5 bg-[#FAF8F5] text-[#1C1917] border border-[#D6D0C4] text-base font-semibold rounded-lg hover:bg-[#F3EFEA] transition-colors whitespace-nowrap"
-                  >
-                    Open Family Dashboard
-                  </button>
-                )}
               </div>
 
               {/* Non-Medical Scope Boundary Statement */}

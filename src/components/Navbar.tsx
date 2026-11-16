@@ -22,7 +22,6 @@ interface NavbarProps {
   onSelectTestAccount?: (uid: string) => void;
   onResetTestDataset?: () => void;
   onExitTestMode?: () => void;
-  onOpenNewBooking: () => void;
   onOpenSupportModal: () => void;
   supportPhone: string;
   supportEmail: string;
@@ -47,7 +46,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectTestAccount,
   onResetTestDataset,
   onExitTestMode,
-  onOpenNewBooking,
   onOpenSupportModal,
   supportPhone,
   supportEmail,
@@ -247,15 +245,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
           )}
 
-          {currentUser ? (
-            <button
-              type="button"
-              onClick={onOpenNewBooking}
-              className="px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm font-semibold text-white bg-[#9A3412] rounded-lg hover:bg-[#7C2D12] transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9A3412]"
-            >
-              Request Hospital Visit
-            </button>
-          ) : firebaseEmail ? (
+          {currentUser || firebaseEmail ? (
             <button
               type="button"
               onClick={onSignOut}

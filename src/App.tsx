@@ -1038,14 +1038,6 @@ export default function App() {
     }
   };
 
-  const handleNavigateToRoleWorkspace = () => {
-    if (!currentUser) {
-      setActiveTab('welcome');
-      return;
-    }
-    setActiveTab('dashboard');
-  };
-
   const handleRegisterUser = async (payload: {
     fullName: string;
     phone: string;
@@ -2540,7 +2532,6 @@ export default function App() {
         onSelectTestAccount={handleSelectTestAccount}
         onResetTestDataset={handleResetTestDataset}
         onExitTestMode={handleExitTestMode}
-        onOpenNewBooking={() => setBookingModalOpen(true)}
         onOpenSupportModal={() => {
           setSupportBookingId('general');
           setSupportModalOpen(true);
@@ -2585,18 +2576,6 @@ export default function App() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setPresetService('hospital_accompaniment');
-                  setPresetDuration(4);
-                  setActiveTab('dashboard');
-                  setBookingModalOpen(true);
-                }}
-                className="px-2.5 py-1 bg-[#9A3412] text-white rounded-md font-semibold hover:bg-[#7C2D12] whitespace-nowrap"
-              >
-                Request Hospital Visit
-              </button>
               <button
                 type="button"
                 onClick={handleResetTestDataset}
@@ -2664,10 +2643,6 @@ export default function App() {
                 : null
             }
             currentUser={currentUser}
-            activeTestAccountUid={activeTestAccount?.profile.uid || null}
-            authBusy={authBusy}
-            onSignInGoogle={handleSignInGoogle}
-            onSelectTestAccount={handleSelectTestAccount}
             onRegisterUser={handleRegisterUser}
             onStartBookingWithPreset={(service, duration) => {
               setPresetService(service);
@@ -2678,7 +2653,10 @@ export default function App() {
                 setActiveTab('dashboard');
               }
             }}
-            onNavigateToRoleWorkspace={handleNavigateToRoleWorkspace}
+            onViewServices={() => {
+              setActiveTab('services');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
             authError={authError}
           />
         )}
@@ -2756,16 +2734,15 @@ export default function App() {
                     : null
                 }
                 currentUser={null}
-                activeTestAccountUid={null}
-                authBusy={authBusy}
-                onSignInGoogle={handleSignInGoogle}
-                onSelectTestAccount={handleSelectTestAccount}
                 onRegisterUser={handleRegisterUser}
                 onStartBookingWithPreset={(service, duration) => {
                   setPresetService(service);
                   setPresetDuration(duration);
                 }}
-                onNavigateToRoleWorkspace={handleNavigateToRoleWorkspace}
+                onViewServices={() => {
+                  setActiveTab('services');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
                 authError={authError}
               />
             ) : currentUser.role === 'helper' ? (
